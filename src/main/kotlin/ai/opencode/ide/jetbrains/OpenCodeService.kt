@@ -51,7 +51,7 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private val logger = Logger.getInstance(OpenCodeService::class.java)
 
-    private enum class ConnectionMode { NONE, TERMINAL, WEB, REMOTE }
+    private enum class ConnectionMode { NONE, TERMINAL, WEB, HEADLESS }
 
     companion object {
         private const val OPEN_CODE_TAB_PREFIX = "OpenCode"
@@ -72,7 +72,6 @@ class OpenCodeService(private val project: Project) : Disposable {
     private var wasEverConnected = false
     private var remoteReconnectFailures = 0
     private var remoteReconnectDialogShown = false
-    private var useWebInterface: Boolean = false
 
     private var terminalVirtualFile: OpenCodeTerminalVirtualFile? = null
     private var terminalEditor: OpenCodeTerminalFileEditor? = null
@@ -521,8 +520,7 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun processConnectionChoice(h: String, p: Int, pwd: String?, web: Boolean, customBasePath: String? = null) {
         val safeH = h.trim().ifBlank { "127.0.0.1" }
-        val local = safeH in listOf("0.0.0.0", "127.0.0.1", "localhost")
-        useWebInterface = web
+        val local = isLocalHost(safeH)
 
         AppExecutorUtil.getAppExecutorService().submit {
             val a = if (!pwd.isNullOrBlank()) ProcessAuthDetector.ServerAuth("opencode", pwd) else if (local) ProcessAuthDetector.detectAuthForPort(p) else ProcessAuthDetector.ServerAuth("opencode", null)
@@ -531,9 +529,9 @@ class OpenCodeService(private val project: Project) : Disposable {
 
             ApplicationManager.getApplication().invokeLater {
                 if (running) {
-                    lastMode = if (!local) ConnectionMode.REMOTE else if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
-                    // For remote (!local), strict headless unless web mode.
-                    // For local, if running, we also just connect (headless or web), we do NOT spawn a new terminal.
+                    lastMode = if (web) ConnectionMode.WEB else ConnectionMode.HEADLESS
+                    // Connecting to an existing server (local or remote): headless unless web mode.
+                    // We do NOT spawn a new terminal here.
                     connectToExistingServer(safeH, p, a, web, web, customBasePath)
                 } else if (occupied) {
                     val choice = Messages.showYesNoDialog(
@@ -545,7 +543,7 @@ class OpenCodeService(private val project: Project) : Disposable {
                         Messages.getWarningIcon()
                     )
                     if (choice == Messages.YES) {
-                        lastMode = if (!local) ConnectionMode.REMOTE else if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
+                        lastMode = if (web) ConnectionMode.WEB else ConnectionMode.HEADLESS
                         connectToExistingServer(safeH, p, a, web, web, customBasePath)
                     } else {
                         showConnectionDialog()
@@ -601,7 +599,7 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun createLocalTerminal(h: String, p: Int, pwd: String?, customBasePath: String? = null) {
         val safeH = h.trim().ifBlank { "127.0.0.1" }
-        if (safeH !in listOf("0.0.0.0", "127.0.0.1", "localhost")) {
+        if (!isLocalHost(safeH)) {
             // Guard: Never attempt to spawn local terminal for remote host
             connectToExistingServer(safeH, p, ProcessAuthDetector.ServerAuth("opencode", pwd), false, false, customBasePath)
             return
@@ -754,19 +752,24 @@ class OpenCodeService(private val project: Project) : Disposable {
     }
 
     private fun isWindows() = System.getProperty("os.name", "").lowercase().contains("windows")
+    private fun isLocalHost(h: String = hostname): Boolean = h in listOf("0.0.0.0", "127.0.0.1", "localhost")
     private fun pinTerminalTab(f: VirtualFile) { try { FileEditorManagerEx.getInstanceEx(project).currentWindow?.setFilePinned(f, true) } catch (_: Exception) {} }
     private fun restartServer(m: ConnectionMode) {
-        val h = hostname; val p = port ?: return; val pwd = password; val web = useWebInterface; disconnectAndReset(); hostname = h; port = p; password = pwd; lastMode = m; useWebInterface = web
-        if (m == ConnectionMode.WEB) createWebTerminal(h, p, pwd)
-        else if (m == ConnectionMode.REMOTE) connectToExistingServer(h, p, ProcessAuthDetector.ServerAuth("opencode", pwd), web, web)
-        else createLocalTerminal(h, p, pwd)
+        val h = hostname; val p = port ?: return; val pwd = password; disconnectAndReset(); hostname = h; port = p; password = pwd; lastMode = m
+        val local = isLocalHost(h)
+        val auth = ProcessAuthDetector.ServerAuth("opencode", pwd)
+        when {
+            m == ConnectionMode.TERMINAL && local -> createLocalTerminal(h, p, pwd)
+            m == ConnectionMode.WEB && local -> createWebTerminal(h, p, pwd)
+            else -> connectToExistingServer(h, p, auth, m == ConnectionMode.WEB, m == ConnectionMode.WEB)
+        }
     }
     private fun focusTerminalUI() { terminalVirtualFile?.let { FileEditorManager.getInstance(project).openFile(it, true) } ?: webVirtualFile?.let { FileEditorManager.getInstance(project).openFile(it, true) } }
     private fun restoreUiForMode() {
         when (lastMode) {
             ConnectionMode.TERMINAL -> ensureTerminalUi()
             ConnectionMode.WEB -> ensureWebUi()
-            ConnectionMode.REMOTE -> if (useWebInterface) ensureWebUi() else restoreRemoteConnection()
+            ConnectionMode.HEADLESS -> restoreHeadlessConnection()
             else -> showConnectionDialog()
         }
     }
@@ -794,8 +797,8 @@ class OpenCodeService(private val project: Project) : Disposable {
             createWebUI(hostname, port ?: return)
         }
     }
-    private fun restoreRemoteConnection() {
-        // For remote connections, verify connection is alive and show status
+    private fun restoreHeadlessConnection() {
+        // Verify the connection is alive and show status (works for local or remote headless).
         val p = port ?: return
         val h = hostname
         AppExecutorUtil.getAppExecutorService().submit {
