@@ -7,6 +7,7 @@ import com.intellij.openapi.project.guessModuleDir
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
@@ -40,6 +41,7 @@ class OpenCodeConnectDialog(
     private val basePathField = ComboBox<String>().apply {
         isEditable = true
     }
+    private val webInterfaceCheckBox = JBCheckBox("Use web interface (embedded browser)")
     
     var hostname: String = "127.0.0.1"
         private set
@@ -61,12 +63,13 @@ class OpenCodeConnectDialog(
 
     override fun createCenterPanel(): JComponent {
         val panel = JPanel(BorderLayout(0, JBUI.scale(8)))
-        panel.preferredSize = Dimension(JBUI.scale(350), JBUI.scale(180))
+        panel.preferredSize = Dimension(JBUI.scale(350), JBUI.scale(210))
 
-        val formPanel = JPanel(GridLayout(6, 1, 0, JBUI.scale(4)))
+        val formPanel = JPanel(GridLayout(7, 1, 0, JBUI.scale(4)))
         val addressLabel = JBLabel("Server address:")
         val passwordLabel = JBLabel("Server password (optional):")
         val basePathLabel = JBLabel("Custom base path (optional):")
+        val webInterfaceLabel = JBLabel("")
 
         // Load saved values
         val props = PropertiesComponent.getInstance()
@@ -99,10 +102,15 @@ class OpenCodeConnectDialog(
             basePathField.selectedIndex = -1
         }
 
+        // Load saved web interface preference
+        webInterfaceCheckBox.isSelected = props.getBoolean(PROP_USE_WEB_INTERFACE, false)
+        webInterfaceLabel.text = ""
+
         addressField.toolTipText = "Format: hostname:port (e.g., 127.0.0.1:4096)"
         passwordField.toolTipText = "OPENCODE_SERVER_PASSWORD"
         passwordField.emptyText.text = "For remote OpenCode servers"
         basePathField.toolTipText = "Override project base path for opencode.exe working directory"
+        webInterfaceCheckBox.toolTipText = "Open the OpenCode web UI inside an editor tab instead of the terminal"
 
         formPanel.add(addressLabel)
         formPanel.add(addressField)
@@ -110,6 +118,8 @@ class OpenCodeConnectDialog(
         formPanel.add(passwordField)
         formPanel.add(basePathLabel)
         formPanel.add(basePathField)
+        formPanel.add(webInterfaceLabel)
+        formPanel.add(webInterfaceCheckBox)
 
         panel.add(formPanel, BorderLayout.CENTER)
 
@@ -157,7 +167,7 @@ class OpenCodeConnectDialog(
         val basePathValue = (basePathField.editor.item as? String)?.trim() ?: ""
         customBasePath = basePathValue.ifBlank { null }
 
-        useWebInterface = false
+        useWebInterface = webInterfaceCheckBox.isSelected
 
         // Save values for next time
         val props = PropertiesComponent.getInstance()
@@ -183,6 +193,9 @@ class OpenCodeConnectDialog(
             props.unsetValue(PROP_CUSTOM_BASE_PATH)
         }
 
+        // Save web interface preference
+        props.setValue(PROP_USE_WEB_INTERFACE, useWebInterface)
+
         super.doOKAction()
     }
 
@@ -190,6 +203,7 @@ class OpenCodeConnectDialog(
         private const val PROP_LAST_ADDRESS = "opencode.lastAddress"
         private const val PROP_LAST_PASSWORD = "opencode.lastPassword"
         private const val PROP_CUSTOM_BASE_PATH = "opencode.customBasePath"
+        private const val PROP_USE_WEB_INTERFACE = "opencode.useWebInterface"
         
         /**
          * Shows the dialog and returns the result.

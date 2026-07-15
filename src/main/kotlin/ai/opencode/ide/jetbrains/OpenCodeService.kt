@@ -72,6 +72,7 @@ class OpenCodeService(private val project: Project) : Disposable {
     private var wasEverConnected = false
     private var remoteReconnectFailures = 0
     private var remoteReconnectDialogShown = false
+    private var useWebInterface: Boolean = false
 
     private var terminalVirtualFile: OpenCodeTerminalVirtualFile? = null
     private var terminalEditor: OpenCodeTerminalFileEditor? = null
@@ -521,7 +522,8 @@ class OpenCodeService(private val project: Project) : Disposable {
     private fun processConnectionChoice(h: String, p: Int, pwd: String?, web: Boolean, customBasePath: String? = null) {
         val safeH = h.trim().ifBlank { "127.0.0.1" }
         val local = safeH in listOf("0.0.0.0", "127.0.0.1", "localhost")
-        
+        useWebInterface = web
+
         AppExecutorUtil.getAppExecutorService().submit {
             val a = if (!pwd.isNullOrBlank()) ProcessAuthDetector.ServerAuth("opencode", pwd) else if (local) ProcessAuthDetector.detectAuthForPort(p) else ProcessAuthDetector.ServerAuth("opencode", null)
             val running = if (local) PortFinder.isOpenCodeRunningOnPort(p, safeH, a.username, a.password) else true
@@ -753,20 +755,20 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun isWindows() = System.getProperty("os.name", "").lowercase().contains("windows")
     private fun pinTerminalTab(f: VirtualFile) { try { FileEditorManagerEx.getInstanceEx(project).currentWindow?.setFilePinned(f, true) } catch (_: Exception) {} }
-    private fun restartServer(m: ConnectionMode) { 
-        val h = hostname; val p = port ?: return; val pwd = password; disconnectAndReset(); hostname = h; port = p; password = pwd; lastMode = m; 
-        if (m == ConnectionMode.WEB) createWebTerminal(h, p, pwd) 
-        else if (m == ConnectionMode.REMOTE) connectToExistingServer(h, p, ProcessAuthDetector.ServerAuth("opencode", pwd), false, false)
-        else createLocalTerminal(h, p, pwd) 
+    private fun restartServer(m: ConnectionMode) {
+        val h = hostname; val p = port ?: return; val pwd = password; val web = useWebInterface; disconnectAndReset(); hostname = h; port = p; password = pwd; lastMode = m; useWebInterface = web
+        if (m == ConnectionMode.WEB) createWebTerminal(h, p, pwd)
+        else if (m == ConnectionMode.REMOTE) connectToExistingServer(h, p, ProcessAuthDetector.ServerAuth("opencode", pwd), web, web)
+        else createLocalTerminal(h, p, pwd)
     }
     private fun focusTerminalUI() { terminalVirtualFile?.let { FileEditorManager.getInstance(project).openFile(it, true) } ?: webVirtualFile?.let { FileEditorManager.getInstance(project).openFile(it, true) } }
-    private fun restoreUiForMode() { 
-        when (lastMode) { 
+    private fun restoreUiForMode() {
+        when (lastMode) {
             ConnectionMode.TERMINAL -> ensureTerminalUi()
             ConnectionMode.WEB -> ensureWebUi()
-            ConnectionMode.REMOTE -> restoreRemoteConnection()
-            else -> showConnectionDialog() 
-        } 
+            ConnectionMode.REMOTE -> if (useWebInterface) ensureWebUi() else restoreRemoteConnection()
+            else -> showConnectionDialog()
+        }
     }
     private fun ensureTerminalUi() { 
         val f = terminalVirtualFile
@@ -784,7 +786,14 @@ class OpenCodeService(private val project: Project) : Disposable {
             }
         }
     }
-    private fun ensureWebUi() { if (webVirtualFile != null) focusTerminalUI() else createWebUI(hostname, port ?: return) }
+    private fun ensureWebUi() {
+        val wf = webVirtualFile
+        if (wf != null && FileEditorManager.getInstance(project).isFileOpen(wf)) {
+            focusTerminalUI()
+        } else {
+            createWebUI(hostname, port ?: return)
+        }
+    }
     private fun restoreRemoteConnection() {
         // For remote connections, verify connection is alive and show status
         val p = port ?: return
