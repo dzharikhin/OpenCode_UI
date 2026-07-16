@@ -203,6 +203,8 @@ class OpenCodeService(private val project: Project) : Disposable {
                     if (snapshot != null) {
                         turnSnapshots[sId] = snapshot
                         logger.info("[OpenCode] Turn #${snapshot.turnNumber} snapshot captured")
+                    }
+                    if (snapshot != null) {
                         try {
                             sendNotification(
                                 "OpenCode Task Completed",
@@ -210,12 +212,13 @@ class OpenCodeService(private val project: Project) : Disposable {
                                 replacePrevious = true
                             )
                         } catch (e: Exception) {
-                            logger.warn("[OpenCode] Failed to send notification: ${e.message}, rethrowing exception", e)
+                            logger.warn("[OpenCode] Failed to send notification: ${e.message}, logging and rethrowing", e)
                             throw e
+                        } finally {
+                            turnIdleWaiting[sId] = true
+                            attemptBarrierTrigger(sId)
                         }
                     }
-                    turnIdleWaiting[sId] = true
-                    attemptBarrierTrigger(sId)
                 }
             }
             is SessionIdleEvent -> {
@@ -224,6 +227,8 @@ class OpenCodeService(private val project: Project) : Disposable {
                 if (snapshot != null) {
                     turnSnapshots[sId] = snapshot
                     logger.info("[OpenCode] Turn #${snapshot.turnNumber} snapshot captured (via idle event)")
+                }
+                if (snapshot != null) {
                     try {
                         sendNotification(
                             "OpenCode Task Completed",
@@ -231,12 +236,13 @@ class OpenCodeService(private val project: Project) : Disposable {
                             replacePrevious = true
                         )
                     } catch (e: Exception) {
-                        logger.warn("[OpenCode] Failed to send notification: ${e.message}, rethrowing", e)
+                        logger.warn("[OpenCode] Failed to send notification: ${e.message}, logging and rethrowing", e)
                         throw e
+                    } finally {
+                        turnIdleWaiting[sId] = true
+                        attemptBarrierTrigger(sId)
                     }
                 }
-                turnIdleWaiting[sId] = true
-                attemptBarrierTrigger(sId)
             }
             is FileEditedEvent -> sessionManager.onFileEdited(event.properties.file)
             is MessageUpdatedEvent -> {
