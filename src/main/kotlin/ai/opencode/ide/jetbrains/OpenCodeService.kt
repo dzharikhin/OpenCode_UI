@@ -832,7 +832,14 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun isWindows() = System.getProperty("os.name", "").lowercase().contains("windows")
     private fun isLocalHost(h: String = hostname): Boolean = h in listOf("0.0.0.0", "127.0.0.1", "localhost")
-    private fun pinTerminalTab(f: VirtualFile) { try { FileEditorManagerEx.getInstanceEx(project).currentWindow?.setFilePinned(f, true) } catch (_: Exception) {} }
+    private fun pinTerminalTab(f: VirtualFile) {
+        try {
+            val mgr = FileEditorManagerEx.getInstanceEx(project)
+            val window = mgr.currentWindow?.takeIf { it.isFileOpen(f) }
+                ?: mgr.windows.firstOrNull { it.isFileOpen(f) }
+            window?.setFilePinned(f, true)
+        } catch (_: Exception) {}
+    }
     private fun restartServer(m: ConnectionMode) {
         val h = hostname; val p = port ?: return; val pwd = password; disconnectAndReset(); hostname = h; port = p; password = pwd; lastMode = m
         val local = isLocalHost(h)
@@ -856,6 +863,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         val f = terminalVirtualFile
         if (f != null && OpenCodeTerminalFileEditorProvider.hasWidget(f)) {
             focusTerminalUI()
+            pinTerminalTab(f)
         } else {
             // Terminal UI doesn't exist, need to create new terminal and start opencode
             try {
@@ -872,6 +880,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         val wf = webVirtualFile
         if (wf != null && FileEditorManager.getInstance(project).isFileOpen(wf)) {
             focusTerminalUI()
+            WebModeSupport.pinTab(project, wf)
         } else {
             createWebUI(hostname, port ?: return)
         }
