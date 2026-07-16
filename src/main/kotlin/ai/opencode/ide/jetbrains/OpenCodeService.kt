@@ -203,11 +203,16 @@ class OpenCodeService(private val project: Project) : Disposable {
                     if (snapshot != null) {
                         turnSnapshots[sId] = snapshot
                         logger.info("[OpenCode] Turn #${snapshot.turnNumber} snapshot captured")
-                        sendNotification(
-                            "OpenCode Task Completed",
-                            "Session is now idle. Checking for changes...",
-                            replacePrevious = true
-                        )
+                        try {
+                            sendNotification(
+                                "OpenCode Task Completed",
+                                "Session is now idle. Checking for changes...",
+                                replacePrevious = true
+                            )
+                        } catch (e: Exception) {
+                            logger.warn("[OpenCode] Failed to send notification: ${e.message}, rethrowing exception", e)
+                            throw e
+                        }
                     }
                     turnIdleWaiting[sId] = true
                     attemptBarrierTrigger(sId)
@@ -219,11 +224,16 @@ class OpenCodeService(private val project: Project) : Disposable {
                 if (snapshot != null) {
                     turnSnapshots[sId] = snapshot
                     logger.info("[OpenCode] Turn #${snapshot.turnNumber} snapshot captured (via idle event)")
-                    sendNotification(
-                        "OpenCode Task Completed",
-                        "Session is now idle. Checking for changes...",
-                        replacePrevious = true
-                    )
+                    try {
+                        sendNotification(
+                            "OpenCode Task Completed",
+                            "Session is now idle. Checking for changes...",
+                            replacePrevious = true
+                        )
+                    } catch (e: Exception) {
+                        logger.warn("[OpenCode] Failed to send notification: ${e.message}, rethrowing", e)
+                        throw e
+                    }
                 }
                 turnIdleWaiting[sId] = true
                 attemptBarrierTrigger(sId)
