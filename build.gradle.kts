@@ -1,7 +1,7 @@
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.1.20"
-    id("org.jetbrains.intellij.platform") version "2.10.2"
+    id("org.jetbrains.kotlin.jvm") version "2.4.20"
+    id("org.jetbrains.intellij.platform") version "2.19.0"
 }
 
 group = "ai.opencode"
@@ -17,11 +17,15 @@ repositories {
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
     intellijPlatform {
-        intellijIdea("2025.2.4")
+        intellijIdea("2026.2")
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
 
         // Terminal API
         bundledPlugin("org.jetbrains.plugins.terminal")
+
+        // JCEF (embedded browser): split out of the platform into bundled modules since 2026.2
+        bundledModule("intellij.platform.ui.jcef")
+        bundledModule("intellij.libraries.jcef")
 
     }
 
@@ -34,6 +38,9 @@ dependencies {
 }
 
 intellijPlatform {
+    // No GUI Designer forms; skip bytecode instrumentation (breaks with Gradle 9 / JDK 25 toolchain)
+    instrumentCode = false
+
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "242"
@@ -55,6 +62,11 @@ tasks {
     withType<JavaCompile> {
         sourceCompatibility = "17"
         targetCompatibility = "17"
+    }
+
+    // IPG 2.19 forces jvmTarget 25 (IDE requirement); keep bytecode at 17 for sinceBuild=242 compatibility
+    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
+        compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 
     withType<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask> {

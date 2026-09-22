@@ -37,7 +37,8 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.concurrency.AppExecutorUtil
 
-import org.jetbrains.plugins.terminal.TerminalView
+import org.jetbrains.plugins.terminal.ShellTerminalWidget
+import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -203,14 +204,21 @@ class OpenCodeService(private val project: Project) : Disposable {
                     if (snapshot != null) {
                         turnSnapshots[sId] = snapshot
                         logger.info("[OpenCode] Turn #${snapshot.turnNumber} snapshot captured")
-                        sendNotification(
-                            "OpenCode Task Completed",
-                            "Session is now idle. Checking for changes...",
-                            replacePrevious = true
-                        )
+                        try {
+                            sendNotification(
+                                "OpenCode Task Completed",
+                                "Session is now idle. Checking for changes...",
+                                replacePrevious = true
+                            )
+                        } finally {
+                            // Barrier must proceed even if notification fails (e.g. headless/test environment)
+                            turnIdleWaiting[sId] = true
+                            attemptBarrierTrigger(sId)
+                        }
+                    } else {
+                        turnIdleWaiting[sId] = true
+                        attemptBarrierTrigger(sId)
                     }
-                    turnIdleWaiting[sId] = true
-                    attemptBarrierTrigger(sId)
                 }
             }
             is SessionIdleEvent -> {
@@ -219,14 +227,21 @@ class OpenCodeService(private val project: Project) : Disposable {
                 if (snapshot != null) {
                     turnSnapshots[sId] = snapshot
                     logger.info("[OpenCode] Turn #${snapshot.turnNumber} snapshot captured (via idle event)")
-                    sendNotification(
-                        "OpenCode Task Completed",
-                        "Session is now idle. Checking for changes...",
-                        replacePrevious = true
-                    )
+                    try {
+                        sendNotification(
+                            "OpenCode Task Completed",
+                            "Session is now idle. Checking for changes...",
+                            replacePrevious = true
+                        )
+                    } finally {
+                        // Barrier must proceed even if notification fails (e.g. headless/test environment)
+                        turnIdleWaiting[sId] = true
+                        attemptBarrierTrigger(sId)
+                    }
+                } else {
+                    turnIdleWaiting[sId] = true
+                    attemptBarrierTrigger(sId)
                 }
-                turnIdleWaiting[sId] = true
-                attemptBarrierTrigger(sId)
             }
             is FileEditedEvent -> sessionManager.onFileEdited(event.properties.file)
             is MessageUpdatedEvent -> {
@@ -706,7 +721,10 @@ class OpenCodeService(private val project: Project) : Disposable {
     private fun createTerminalUIInternal(h: String, p: Int, pwd: String?, cont: Boolean = true, command: String? = null, customBasePath: String? = null, attach: Boolean = false) {
         val t = "$OPEN_CODE_TAB_PREFIX($p)"
         val wd = customBasePath ?: project.basePath
-        val w = TerminalView.getInstance(project).createLocalShellWidget(wd, t)
+        @Suppress("DEPRECATION")
+        val w = ShellTerminalWidget.toShellJediTermWidgetOrThrow(
+            TerminalToolWindowManager.getInstance(project).createShellWidget(wd, t, true, true)
+        )
         OpenCodeTerminalLinkFilter.install(project, w)
         val f = OpenCodeTerminalVirtualFile(t)
         terminalVirtualFile = f; OpenCodeTerminalFileEditorProvider.registerWidget(f, w)
