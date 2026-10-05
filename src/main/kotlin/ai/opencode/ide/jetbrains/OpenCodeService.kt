@@ -6,10 +6,7 @@ import ai.opencode.ide.jetbrains.api.models.*
 import ai.opencode.ide.jetbrains.diff.DiffViewerService
 import ai.opencode.ide.jetbrains.session.SessionManager
 import ai.opencode.ide.jetbrains.session.TurnSnapshot
-import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalFileEditor
-import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalFileEditorProvider
-import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalLinkFilter
-import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalVirtualFile
+import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalController
 import ai.opencode.ide.jetbrains.ui.OpenCodeConnectDialog
 import ai.opencode.ide.jetbrains.util.PathUtil
 import ai.opencode.ide.jetbrains.util.PortFinder
@@ -30,6 +27,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.ex.FileEditorManagerEx
 import com.intellij.openapi.project.Project
@@ -37,10 +35,6 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.concurrency.AppExecutorUtil
 
-import org.jetbrains.plugins.terminal.TerminalView
-
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -74,8 +68,9 @@ class OpenCodeService(private val project: Project) : Disposable {
     private var remoteReconnectFailures = 0
     private var remoteReconnectDialogShown = false
 
-    private var terminalVirtualFile: OpenCodeTerminalVirtualFile? = null
-    private var terminalEditor: OpenCodeTerminalFileEditor? = null
+    private var terminalVirtualFile: VirtualFile? = null
+    private var terminalEditor: FileEditor? = null
+    private val terminalController = OpenCodeTerminalController(project) { onTerminalDisposed() }
     private var webVirtualFile: OpenCodeWebVirtualFile? = null
 
     private val connectionListeners = CopyOnWriteArrayList<(Boolean) -> Unit>()
@@ -464,13 +459,18 @@ class OpenCodeService(private val project: Project) : Disposable {
         val message = "[$time] $content"
         invokeLater {
             if (project.isDisposed) return@invokeLater
-            if (replacePrevious) lastIdleNotification?.expire()
-            val notification = NotificationGroupManager.getInstance()
-                .getNotificationGroup("OpenCode")
-                .createNotification(title, message, type)
-                .setImportant(true)
-            if (replacePrevious) lastIdleNotification = notification
-            notification.notify(project)
+            // A notification failure must never break the caller (e.g. no Application in headless tests).
+            try {
+                if (replacePrevious) lastIdleNotification?.expire()
+                val notification = NotificationGroupManager.getInstance()
+                    .getNotificationGroup("OpenCode")
+                    .createNotification(title, message, type)
+                    .setImportant(true)
+                if (replacePrevious) lastIdleNotification = notification
+                notification.notify(project)
+            } catch (e: Throwable) {
+                logger.debug("[OpenCode] Balloon notification failed: ${e.message}")
+            }
             try {
                 SystemNotifications.getInstance().notify("OpenCode", title, message)
             } catch (e: Throwable) {
@@ -479,23 +479,19 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
 
-    override fun dispose() { disconnectAndReset(); OpenCodeTerminalFileEditorProvider.clearAll() }
+    override fun dispose() { disconnectAndReset(); terminalController.dispose() }
 
     private fun disconnectAndReset() {
         connectionManagerTask?.cancel(true); sseListener?.disconnect(); isConnected.set(false); isConnecting.set(false)
         turnMessageIds.clear(); turnPendingPayloads.clear(); turnSnapshots.clear(); turnIdleWaiting.clear(); turnBarrierTasks.values.forEach { it.cancel(false) }; turnBarrierTasks.clear()
         terminateProcess()
-        terminalVirtualFile?.let { OpenCodeTerminalFileEditorProvider.disposeWidget(it, null) }
+        terminalController.close()
         terminalVirtualFile = null; terminalEditor = null; webVirtualFile = null; port = null; hostname = "127.0.0.1"; apiClient = null
     }
 
     private fun terminateProcess() {
         try {
-            val process = terminalEditor?.terminalWidget?.processTtyConnector?.process
-            if (process?.isAlive == true) {
-                process.destroy()
-                if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
-            }
+            terminalController.terminate()
         } catch (_: Exception) {}
     }
 
@@ -705,27 +701,24 @@ class OpenCodeService(private val project: Project) : Disposable {
     }
 
     private fun createTerminalUIInternal(h: String, p: Int, pwd: String?, cont: Boolean = true, command: String? = null, customBasePath: String? = null, attach: Boolean = false) {
+        if (!ApplicationManager.getApplication().isDispatchThread) {
+            ApplicationManager.getApplication().invokeLater { createTerminalUIInternal(h, p, pwd, cont, command, customBasePath, attach) }
+            return
+        }
         val t = "$OPEN_CODE_TAB_PREFIX($p)"
         val wd = customBasePath ?: project.basePath
-        val w = TerminalView.getInstance(project).createLocalShellWidget(wd, t)
-        OpenCodeTerminalLinkFilter.install(project, w)
-        val f = OpenCodeTerminalVirtualFile(t)
-        terminalVirtualFile = f; OpenCodeTerminalFileEditorProvider.registerWidget(f, w)
-        ApplicationManager.getApplication().invokeLater {
-            terminalEditor = FileEditorManager.getInstance(project).openFile(f, true).firstOrNull { it is OpenCodeTerminalFileEditor } as? OpenCodeTerminalFileEditor
-            terminalEditor?.let {
-                val cmd = command ?: getOpenCodeBinary()
-                w.executeCommand(buildOpenCodeCommand(cmd, h, p, pwd, cont, attach)); pinTerminalTab(f)
-            }
-        }
+        // Password goes through the terminal session env - no shell-specific quoting needed.
+        val env = if (pwd.isNullOrBlank()) emptyMap() else mapOf("OPENCODE_SERVER_PASSWORD" to pwd)
+        val cmd = buildOpenCodeCommand(command ?: getOpenCodeBinary(), h, p, cont, attach)
+        terminalVirtualFile = terminalController.open(t, wd, env, cmd)
+        terminalEditor = terminalController.editor()
+        terminalVirtualFile?.let { pinTerminalTab(it) }
     }
 
-    private fun buildOpenCodeCommand(command: String, h: String, p: Int, pwd: String?, cont: Boolean, attach: Boolean = false): String {
+    private fun buildOpenCodeCommand(command: String, h: String, p: Int, cont: Boolean, attach: Boolean = false): String {
         // Quote command if it contains spaces (e.g. absolute path on Windows)
         val cmdSafe = if (command.contains(" ")) "\"$command\"" else command
-        val base = if (attach) "$cmdSafe attach http://$h:$p${if (cont) " --continue" else ""}" else "$cmdSafe --hostname $h --port $p${if (cont) " --continue" else ""}"
-        if (pwd.isNullOrBlank()) return base
-        return if (isWindows()) "cmd /c \"set \"OPENCODE_SERVER_PASSWORD=${pwd.replace("\"", "\\\"")}\" && $base\"" else "OPENCODE_SERVER_PASSWORD='${pwd.replace("'", "'\\''")}' $base"
+        return if (attach) "$cmdSafe attach http://$h:$p${if (cont) " --continue" else ""}" else "$cmdSafe --hostname $h --port $p${if (cont) " --continue" else ""}"
     }
 
     @Volatile private var _cachedBinary: String? = null
@@ -861,10 +854,9 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
     private fun ensureTerminalUi() { 
-        val f = terminalVirtualFile
-        if (f != null && OpenCodeTerminalFileEditorProvider.hasWidget(f)) {
+        if (terminalController.isAlive()) {
             focusTerminalUI()
-            pinTerminalTab(f)
+            terminalVirtualFile?.let { pinTerminalTab(it) }
         } else {
             // Terminal UI doesn't exist, need to create new terminal and start opencode
             try {

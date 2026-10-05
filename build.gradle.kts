@@ -39,6 +39,10 @@ dependencies {
 }
 
 intellijPlatform {
+    // javac2 forms/nullability instrumentation is not needed for this pure-Kotlin plugin
+    // (and fails on this platform layout).
+    instrumentCode.set(false)
+
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "262"
@@ -58,6 +62,23 @@ intellijPlatform {
 }
 
 tasks {
+    // Pin the Kotlin module name so `internal` member mangling stays stable across
+    // compilations and matches previously built callers (KGP default changed in 2.2+).
+    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        compilerOptions {
+            freeCompilerArgs.addAll("-module-name", "OpenCode_UI")
+        }
+    }
+
+    test {
+        // Restrict to the real test classes: the test source set also contains helper
+        // classes (FakeOpenCodeServer, TestRunner, TestSessionManager, MockDiffViewerService)
+        // that the JUnit Platform would otherwise try to run and report as invalid.
+        include("**/SendSelectionToTerminalActionTest*.class")
+        include("**/OpenCodeLogicTest*.class")
+        include("**/RealProcessIntegrationTest*.class")
+    }
+
     withType<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask> {
         systemProperty("ide.no.platform.update", "true")
     }
