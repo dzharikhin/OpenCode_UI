@@ -11,10 +11,13 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import ai.opencode.ide.jetbrains.OpenCodeService
+import ai.opencode.ide.jetbrains.web.WebModeSupport
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.GridLayout
 import java.util.Base64
+import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JPanel
 
@@ -31,7 +34,8 @@ class OpenCodeConnectDialog(
         val hostname: String,
         val port: Int,
         val password: String?,
-        val useWebInterface: Boolean,
+        val action: OpenCodeService.ConnectAction,
+        val ui: OpenCodeService.ConnectionMode,
         val customBasePath: String? = null
     )
 
@@ -40,7 +44,15 @@ class OpenCodeConnectDialog(
     private val basePathField = ComboBox<String>().apply {
         isEditable = true
     }
-    
+    private val actionCombo = JComboBox<OpenCodeService.ConnectAction>().apply {
+        OpenCodeService.ConnectAction.values().forEach { addItem(it) }
+        selectedItem = OpenCodeService.ConnectAction.AUTO
+    }
+    private val interfaceCombo = JComboBox<OpenCodeService.ConnectionMode>().apply {
+        OpenCodeService.ConnectionMode.values().filter { it != OpenCodeService.ConnectionMode.NONE }.forEach { addItem(it) }
+        selectedItem = OpenCodeService.ConnectionMode.TERMINAL
+    }
+
     var hostname: String = "127.0.0.1"
         private set
     var port: Int = defaultPort
@@ -49,26 +61,19 @@ class OpenCodeConnectDialog(
         private set
     var customBasePath: String? = null
         private set
-    var useWebInterface: Boolean = false
-        private set
 
     init {
         title = "Connect to OpenCode"
         setOKButtonText("Connect")
         setCancelButtonText("Close")
         init()
+
+        loadSavedValues()
+        refreshInterfaceOptions()
+        actionCombo.addActionListener { refreshInterfaceOptions() }
     }
 
-    override fun createCenterPanel(): JComponent {
-        val panel = JPanel(BorderLayout(0, JBUI.scale(8)))
-        panel.preferredSize = Dimension(JBUI.scale(350), JBUI.scale(180))
-
-        val formPanel = JPanel(GridLayout(6, 1, 0, JBUI.scale(4)))
-        val addressLabel = JBLabel("Server address:")
-        val passwordLabel = JBLabel("Server password (optional):")
-        val basePathLabel = JBLabel("Custom base path (optional):")
-
-        // Load saved values
+    private fun loadSavedValues() {
         val props = PropertiesComponent.getInstance()
         // Always suggest a new available port by default
         addressField.text = "127.0.0.1:$defaultPort"
@@ -99,10 +104,52 @@ class OpenCodeConnectDialog(
             basePathField.selectedIndex = -1
         }
 
+        val savedAction = props.getInt(PROP_CONNECT_ACTION, OpenCodeService.ConnectAction.AUTO.ordinal)
+        val savedInterface = props.getInt(PROP_INTERFACE_CHOICE, OpenCodeService.ConnectionMode.TERMINAL.ordinal)
+        actionCombo.selectedIndex = savedAction
+        interfaceCombo.selectedIndex = savedInterface
+    }
+
+    private fun refreshInterfaceOptions() {
+        val action = actionCombo.selectedItem as OpenCodeService.ConnectAction
+        val isWebSupported = WebModeSupport.isJcefSupported()
+
+        val allowed = OpenCodeService.ConnectionMode.values()
+            .filter { it != OpenCodeService.ConnectionMode.NONE }
+            .toMutableList()
+
+        if (!isWebSupported) allowed.remove(OpenCodeService.ConnectionMode.WEB)
+        if (action == OpenCodeService.ConnectAction.START_NEW) allowed.remove(OpenCodeService.ConnectionMode.HEADLESS)
+
+        interfaceCombo.removeAllItems()
+        for (choice in allowed) {
+            interfaceCombo.addItem(choice)
+        }
+
+        val current = interfaceCombo.selectedItem as OpenCodeService.ConnectionMode
+        val currentIndex = allowed.indexOf(current)
+        interfaceCombo.selectedIndex = if (currentIndex >= 0) currentIndex else 0
+    }
+
+    override fun createCenterPanel(): JComponent {
+        val panel = JPanel(BorderLayout(0, JBUI.scale(8)))
+        panel.preferredSize = Dimension(JBUI.scale(400), JBUI.scale(280))
+
+        val formPanel = JPanel(GridLayout(8, 1, 0, JBUI.scale(4)))
+        val addressLabel = JBLabel("Server address:")
+        val passwordLabel = JBLabel("Server password (optional):")
+        val basePathLabel = JBLabel("Custom base path (optional):")
+        val actionLabel = JBLabel("Action:")
+        val interfaceLabel = JBLabel("Interface:")
+
         addressField.toolTipText = "Format: hostname:port (e.g., 127.0.0.1:4096)"
         passwordField.toolTipText = "OPENCODE_SERVER_PASSWORD"
         passwordField.emptyText.text = "For remote OpenCode servers"
         basePathField.toolTipText = "Override project base path for opencode.exe working directory"
+        actionLabel.toolTipText = "AUTO: Try to connect or spawn a new server. START_NEW: Spawn a new server on localhost. ATTACH: Connect to an existing server."
+        interfaceLabel.toolTipText = "TERMINAL: Open in terminal UI. WEB: Open in embedded browser. HEADLESS: Silent connection for external terminal."
+        actionCombo.toolTipText = actionLabel.toolTipText
+        interfaceCombo.toolTipText = interfaceLabel.toolTipText
 
         formPanel.add(addressLabel)
         formPanel.add(addressField)
@@ -110,6 +157,10 @@ class OpenCodeConnectDialog(
         formPanel.add(passwordField)
         formPanel.add(basePathLabel)
         formPanel.add(basePathField)
+        formPanel.add(actionLabel)
+        formPanel.add(actionCombo)
+        formPanel.add(interfaceLabel)
+        formPanel.add(interfaceCombo)
 
         panel.add(formPanel, BorderLayout.CENTER)
 
@@ -153,16 +204,17 @@ class OpenCodeConnectDialog(
 
         val passwordValue = passwordField.password.concatToString().trim()
         password = passwordValue.ifBlank { null }
-        
+
         val basePathValue = (basePathField.editor.item as? String)?.trim() ?: ""
         customBasePath = basePathValue.ifBlank { null }
 
-        useWebInterface = false
+        val action = actionCombo.selectedItem as OpenCodeService.ConnectAction
+        val ui = interfaceCombo.selectedItem as OpenCodeService.ConnectionMode
 
         // Save values for next time
         val props = PropertiesComponent.getInstance()
         props.setValue(PROP_LAST_ADDRESS, "$hostname:$port")
-        
+
         // Save password (Base64 encoded for basic obfuscation)
         try {
             if (!password.isNullOrBlank()) {
@@ -183,6 +235,9 @@ class OpenCodeConnectDialog(
             props.unsetValue(PROP_CUSTOM_BASE_PATH)
         }
 
+        props.setValue(PROP_CONNECT_ACTION, action.ordinal.toString())
+        props.setValue(PROP_INTERFACE_CHOICE, ui.ordinal.toString())
+
         super.doOKAction()
     }
 
@@ -190,7 +245,9 @@ class OpenCodeConnectDialog(
         private const val PROP_LAST_ADDRESS = "opencode.lastAddress"
         private const val PROP_LAST_PASSWORD = "opencode.lastPassword"
         private const val PROP_CUSTOM_BASE_PATH = "opencode.customBasePath"
-        
+        private const val PROP_CONNECT_ACTION = "opencode.action"
+        private const val PROP_INTERFACE_CHOICE = "opencode.interface"
+
         /**
          * Shows the dialog and returns the result.
          * @return ConnectionInfo if user clicked Connect, null if cancelled
@@ -198,7 +255,7 @@ class OpenCodeConnectDialog(
         fun show(project: Project, defaultPort: Int): ConnectionInfo? {
             val dialog = OpenCodeConnectDialog(project, defaultPort)
             return if (dialog.showAndGet()) {
-                ConnectionInfo(dialog.hostname, dialog.port, dialog.password, dialog.useWebInterface, dialog.customBasePath)
+                ConnectionInfo(dialog.hostname, dialog.port, dialog.password, dialog.actionCombo.selectedItem as OpenCodeService.ConnectAction, dialog.interfaceCombo.selectedItem as OpenCodeService.ConnectionMode, dialog.customBasePath)
             } else {
                 null
             }
