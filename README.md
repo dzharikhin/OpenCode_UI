@@ -14,7 +14,6 @@ A JetBrains IDE plugin that integrates [OpenCode](https://opencode.ai) — the o
 | **Diff Review** | View diffs and accept/reject changes in IDE | — | — |
 | **Notifications** | System alert when task completes | — | — |
 | **Auto-Resume** | Restore last session on launch | — | — |
-| **Smart Links** | Clickable file paths in terminal | — | — |
 | **Auth Support** | Optional password for OpenCode server | — | — |
 | **Local Change Alert** | Warn when local edits differ from AI output | — | — |
 
@@ -38,7 +37,8 @@ Click the **OpenCode** icon in the right sidebar to instantly focus or create an
 
 ## Requirements
 
-- **JetBrains IDE**: IntelliJ IDEA, WebStorm, PyCharm, etc. (2025.2+)
+- **JetBrains IDE**: IntelliJ IDEA, WebStorm, PyCharm, etc. (2026.2+)
+- **Web mode**: requires the bundled *Web Browser (JCEF)* plugin to be enabled
 - **OpenCode CLI**: Install via `npm install -g opencode` or see [opencode.ai/download](https://opencode.ai/download)
 
 ## Installation
@@ -105,10 +105,6 @@ When OpenCode edits files, the plugin opens a native IDE diff viewer.
 The plugin sends a system notification when OpenCode finishes a task (transitions from Busy to Idle). This allows you to switch to other work while the AI is generating code, and be notified immediately when it's done.
 
 > **Tip**: To receive desktop notifications, please ensure your operating system allows notifications for the JetBrains IDE (e.g., on macOS: *System Settings > Notifications > IntelliJ IDEA*).
-
-### 6. Smart File Links
-
-File paths in the terminal output (e.g., `@src/main/kotlin/Main.kt#L10-20`) are clickable. Clicking them opens the file in the editor and highlights the referenced lines.
 
 ## Keyboard Shortcuts
 

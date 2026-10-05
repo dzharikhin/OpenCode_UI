@@ -6,13 +6,16 @@ This document provides strict guidelines and useful context for AI agents (and h
 ## 1. Project Overview
 
 - **Type**: IntelliJ Platform Plugin
-- **Language**: Kotlin (JDK 17)
+- **Language**: Kotlin (JDK 25)
 - **Build System**: Gradle (Kotlin DSL)
-- **Target Platform**: IntelliJ IDEA 2024.2+ (Since Build 242)
-- **Version**: 1.0.4+ (See `build.gradle.kts`)
+- **Target Platform**: IntelliJ IDEA 2026.2+ (Since Build 262)
+- **Version**: 2.0.0+ (See `build.gradle.kts`)
 
 ### Core Dependencies
-- **IntelliJ Platform SDK**: 2025.2.4
+- **IntelliJ Platform SDK**: 2026.2.1
+- **Bundled plugins**: `org.jetbrains.plugins.terminal` (incl. the public content
+  module `intellij.terminal.frontend`), `com.intellij.modules.jcef` (Web mode -
+  JCEF was extracted from the platform into a bundled plugin in 2026.2)
 - **OkHttp**: 4.12.0 (Networking, SSE)
 - **Gson**: 2.11.0 (JSON Serialization)
 
@@ -112,9 +115,7 @@ src/main/kotlin/ai/opencode/ide/jetbrains/
 ├── session/                    # STATE: Session & File Management
 │   └── SessionManager.kt       # Tracks active session, file snapshots, and history
 ├── terminal/                   # INTEGRATION: Embedded Terminal
-│   ├── OpenCodeTerminalVirtualFile.kt
-│   ├── OpenCodeTerminalFileEditor.kt
-│   └── OpenCodeTerminalLinkFilter.kt # Hyperlinks in terminal (@file:line)
+│   └── OpenCodeTerminalController.kt # Sole seam to the reworked 2026.2 terminal API
 ├── ui/                         # UI: Dialogs & Popups
 │   └── OpenCodeConnectDialog.kt
 └── util/                       # UTILS: Helpers
@@ -125,7 +126,13 @@ src/main/kotlin/ai/opencode/ide/jetbrains/
 ### Key Architectural Concepts
 1.  **OpenCodeService**: The central hub. It owns the `ApiClient` and orchestrates the connection.
 2.  **SessionManager**: Manages the "business logic" of the active coding session, including Git operations and file tracking.
-3.  **Terminal Integration**: We don't just spawn a shell; we wrap it in a custom `FileEditor` to provide a "Tab" experience (similar to opening a file).
+3.  **Terminal Integration**: The reworked 2026.2 terminal API is used via a single seam
+    (`terminal/OpenCodeTerminalController.kt`). A detached terminal tab
+    (`TerminalToolWindowTabsManager`) is opened in the editor area as the platform's
+    `TerminalViewVirtualFile` (served by the Terminal plugin's own `terminal-view-editor`
+    provider). `TerminalViewVirtualFile` is Kotlin-internal, so its only construction
+    site is the Java shim `src/main/java/ai/opencode/ide/jetbrains/terminal/TerminalViewFiles.java`.
+    Do not use the deprecated `TerminalView.createLocalShellWidget` anywhere.
 4.  **Diff Strategy**: We use local Git operations (`git add` for accept, custom restore for reject) rather than relying solely on server-side reverts.
 
 ## 5. Development Workflow for Agents
