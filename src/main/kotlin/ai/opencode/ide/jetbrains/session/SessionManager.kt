@@ -13,7 +13,6 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.runWriteAction
 import com.intellij.openapi.command.CommandProcessor
-import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.event.DocumentEvent
@@ -23,11 +22,13 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.openapi.vfs.VirtualFileCopyEvent
-import com.intellij.openapi.vfs.VirtualFileEvent
-import com.intellij.openapi.vfs.VirtualFileListener
-import com.intellij.openapi.vfs.VirtualFileMoveEvent
 import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.openapi.vfs.newvfs.BulkFileListener
+import com.intellij.openapi.vfs.newvfs.events.VFileContentChangeEvent
+import com.intellij.openapi.vfs.newvfs.events.VFileCreateEvent
+import com.intellij.openapi.vfs.newvfs.events.VFileDeleteEvent
+import com.intellij.openapi.vfs.newvfs.events.VFileEvent
+import com.intellij.openapi.vfs.newvfs.events.VFileMoveEvent
 import com.intellij.util.concurrency.AppExecutorUtil
 import java.util.concurrent.ConcurrentHashMap
 
@@ -107,28 +108,33 @@ open class SessionManager(private val project: Project) : Disposable {
         }
     }
 
-    private val vfsListener = object : VirtualFileListener {
-        override fun fileCreated(event: VirtualFileEvent) {
-            onVfsChange(event.file)
-            // Record creation event - will be cross-checked with serverEditedFiles later
-            // to determine if it's truly AI-created or user-created
-            val relPath = PathUtil.relativizeToProject(project, event.file.path)
-            aiCreatedFiles.add(relPath)
-            logger.info("[Turn #$turnNumber] VFS fileCreated: $relPath")
+    private val vfsListener = object : BulkFileListener {
+        override fun before(events: List<VFileEvent>) {
+            for (event in events) {
+                when (event) {
+                    is VFileContentChangeEvent, is VFileDeleteEvent -> captureContentBeforeChange(event.file)
+                    else -> {}
+                }
+            }
         }
-        
-        override fun beforeFileDeletion(event: VirtualFileEvent) {
-            captureContentBeforeChange(event.file)
+
+        override fun after(events: List<VFileEvent>) {
+            for (event in events) {
+                when (event) {
+                    is VFileCreateEvent -> {
+                        val file = event.file ?: continue
+                        onVfsChange(file)
+                        // Record creation event - will be cross-checked with serverEditedFiles later
+                        // to determine if it's truly AI-created or user-created
+                        val relPath = PathUtil.relativizeToProject(project, file.path)
+                        aiCreatedFiles.add(relPath)
+                        logger.info("[Turn #$turnNumber] VFS fileCreated: $relPath")
+                    }
+                    is VFileDeleteEvent, is VFileContentChangeEvent, is VFileMoveEvent -> onVfsChange(event.file)
+                    else -> {}
+                }
+            }
         }
-        
-        override fun beforeContentsChange(event: VirtualFileEvent) {
-            captureContentBeforeChange(event.file)
-        }
-        
-        override fun fileDeleted(event: VirtualFileEvent) = onVfsChange(event.file)
-        override fun contentsChanged(event: VirtualFileEvent) = onVfsChange(event.file)
-        override fun fileMoved(event: VirtualFileMoveEvent) = onVfsChange(event.file)
-        // fileCopied is rare for AI and caused compilation issues
     }
 
     internal fun captureContentBeforeChange(file: VirtualFile?) {
@@ -314,7 +320,8 @@ open class SessionManager(private val project: Project) : Disposable {
         // Skip listener registration in test mode if Application is not loaded
         if (ApplicationManager.getApplication() != null) {
             EditorFactory.getInstance().eventMulticaster.addDocumentListener(documentListener, this)
-            VirtualFileManager.getInstance().addVirtualFileListener(vfsListener, this)
+            // addVirtualFileListener is deprecated; subscribe to the VFS topic instead.
+            project.messageBus.connect(this).subscribe(VirtualFileManager.VFS_CHANGES, vfsListener)
         }
     }
 

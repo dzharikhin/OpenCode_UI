@@ -17,7 +17,6 @@ import ai.opencode.ide.jetbrains.web.WebModeSupport
 import com.google.gson.JsonElement
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.CapturingProcessHandler
-import com.intellij.execution.process.OSProcessHandler
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType

@@ -329,12 +329,34 @@ class TestRunner(val serverPort: Int) {
     init {
         // Setup Mocks
         val tempDir = System.getProperty("java.io.tmpdir")
+
+        // No-op message bus so SessionManager's VFS_CHANGES subscription works with a mock project
+        val mockConnection = Proxy.newProxyInstance(
+            com.intellij.util.messages.MessageBusConnection::class.java.classLoader,
+            arrayOf(com.intellij.util.messages.MessageBusConnection::class.java)
+        ) { _, method, _ ->
+            when (method.name) {
+                "isDisposed" -> false
+                else -> null
+            }
+        } as com.intellij.util.messages.MessageBusConnection
+        val mockBus = Proxy.newProxyInstance(
+            com.intellij.util.messages.MessageBus::class.java.classLoader,
+            arrayOf(com.intellij.util.messages.MessageBus::class.java)
+        ) { _, method, _ ->
+            when (method.name) {
+                "connect" -> mockConnection
+                else -> null
+            }
+        } as com.intellij.util.messages.MessageBus
+
         mockProject = Proxy.newProxyInstance(
             Project::class.java.classLoader,
             arrayOf(Project::class.java)
         ) { _, method, _ ->
             when (method.name) {
                 "getBasePath" -> tempDir
+                "getMessageBus" -> mockBus
                 "isDisposed" -> false
                 "toString" -> "MockProject"
                 "hashCode" -> 12345
