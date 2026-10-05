@@ -15,11 +15,16 @@
         <li><b>Quick Launch:</b> Connect to existing OpenCode server (e.g., OpenCode Desktop) or create new terminal with <code>Cmd+Esc</code> / <code>Ctrl+\</code>. Supports automatic authentication and optional password input.</li>
         <li><b>Context Sharing:</b> Send current file, selection, or Project View items to the agent with <code>Opt+Cmd+K</code> / <code>Ctrl+Alt+K</code>.</li>
         <li><b>Native Diff Review:</b> Review AI-generated changes in a multi-file diff viewer. Accept stages changes (<code>git add</code>), Reject restores original content. Automatic snapshots ensure you can always recover previous versions.</li>
-    </ul>
+    </ul><br>
+    <b>Requirements:</b> IntelliJ IDEA 2026.2 or newer. <b>Web mode</b> additionally requires the bundled <i>Web Browser (JCEF)</i> plugin to be enabled.
   ]]></description>
 
   <depends>com.intellij.modules.platform</depends>
   <depends>org.jetbrains.plugins.terminal</depends>
+  <!-- The reworked 2026.2 terminal API classes live in a public content module of the Terminal plugin -->
+  <dependencies>
+    <module name="intellij.terminal.frontend"/>
+  </dependencies>
   <!-- JCEF Browser Support (Optional) -->
   <depends optional="true" config-file="opencode-web-support.xml">com.intellij.modules.jcef</depends>
 
@@ -62,9 +67,11 @@
     <projectService serviceImplementation="ai.opencode.ide.jetbrains.session.SessionManager"/>
     <projectService serviceImplementation="ai.opencode.ide.jetbrains.diff.DiffViewerService"/>
 
-    <!-- File Editor Provider -->
-    <fileEditorProvider implementation="ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalFileEditorProvider"/>
-    <fileEditorProvider implementation="ai.opencode.ide.jetbrains.web.OpenCodeWebFileEditorProvider"/>
+    <!-- File Editor Providers:
+         - terminal.OpenCodeTerminalFileEditorProvider removed: OpenCode uses the terminal plugin's
+           own "terminal-view-editor" provider (reworked 2026.2 terminal API).
+         - web.OpenCodeWebFileEditorProvider is registered in opencode-web-support.xml, guarded by
+           the optional com.intellij.modules.jcef <depends> above (do NOT register it here). -->
 
     <!-- Notifications -->
     <notificationGroup id="OpenCode" displayType="BALLOON"/>
@@ -75,9 +82,4 @@
                 anchor="right"/>
 
   </extensions>
-
-  <projectListeners>
-    <listener class="ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalEditorListener"
-              topic="com.intellij.openapi.fileEditor.FileEditorManagerListener"/>
-  </projectListeners>
 </idea-plugin>
