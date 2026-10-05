@@ -510,9 +510,10 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun showConnectionDialog() {
         AppExecutorUtil.getAppExecutorService().submit {
-            val suggested = PortFinder.findAvailablePort()
+            val attachPort = PortFinder.findLastRunningOpenCodeServer()
+            val startNewPort = PortFinder.findAvailablePort()
             ApplicationManager.getApplication().invokeLater {
-                OpenCodeConnectDialog.show(project, suggested)?.let {
+                OpenCodeConnectDialog.show(project, startNewPort, attachPort)?.let {
                     processConnectionChoice(it.hostname, it.port, it.password, it.action, it.ui, it.customBasePath)
                 }
             }

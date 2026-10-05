@@ -24,10 +24,13 @@ import javax.swing.JPanel
 /**
  * Dialog for configuring OpenCode server connection.
  * Allows user to specify host:port before starting the terminal.
+ * @param startNewPort Default port for START_NEW action (first free port)
+ * @param attachPort Default port for AUTO/ATTACH actions (last running server, null if none)
  */
 class OpenCodeConnectDialog(
     private val project: Project,
-    private val defaultPort: Int
+    private val startNewPort: Int,
+    private val attachPort: Int?
 ) : DialogWrapper(project, true) {
 
     data class ConnectionInfo(
@@ -39,7 +42,7 @@ class OpenCodeConnectDialog(
         val customBasePath: String? = null
     )
 
-    private val addressField = JBTextField("127.0.0.1:$defaultPort")
+    private val addressField = JBTextField("127.0.0.1:$startNewPort")
     private val passwordField = JBPasswordField()
     private val basePathField = ComboBox<String>().apply {
         isEditable = true
@@ -53,9 +56,11 @@ class OpenCodeConnectDialog(
         selectedItem = OpenCodeService.ConnectionMode.TERMINAL
     }
 
+    private var lastSuggestion: String? = null
+
     var hostname: String = "127.0.0.1"
         private set
-    var port: Int = defaultPort
+    var port: Int = startNewPort
         private set
     var password: String? = null
         private set
@@ -70,14 +75,30 @@ class OpenCodeConnectDialog(
 
         loadSavedValues()
         refreshInterfaceOptions()
-        actionCombo.addActionListener { refreshInterfaceOptions() }
+        actionCombo.addActionListener {
+            refreshInterfaceOptions()
+            refreshSuggestedAddress()
+        }
+    }
+
+    private fun suggestedAddress(action: OpenCodeService.ConnectAction): String {
+        val p = if (action == OpenCodeService.ConnectAction.START_NEW) startNewPort else attachPort ?: startNewPort
+        return "127.0.0.1:$p"
+    }
+
+    /** Updates the address field to the suggestion for the current action, unless the user typed a custom address */
+    private fun refreshSuggestedAddress(force: Boolean = false) {
+        val suggestion = suggestedAddress(actionCombo.selectedItem as OpenCodeService.ConnectAction)
+        val current = addressField.text.trim()
+        if (force || current.isBlank() || current == lastSuggestion) {
+            addressField.text = suggestion
+            lastSuggestion = suggestion
+        }
     }
 
     private fun loadSavedValues() {
         val props = PropertiesComponent.getInstance()
-        // Always suggest a new available port by default
-        addressField.text = "127.0.0.1:$defaultPort"
-        
+
         // Load saved password (Base64 encoded for basic obfuscation)
         try {
             val encodedPassword = props.getValue(PROP_LAST_PASSWORD, "")
@@ -108,6 +129,9 @@ class OpenCodeConnectDialog(
         val savedInterface = props.getInt(PROP_INTERFACE_CHOICE, OpenCodeService.ConnectionMode.TERMINAL.ordinal)
         actionCombo.selectedIndex = savedAction
         interfaceCombo.selectedIndex = savedInterface
+
+        // Pre-fill address according to the initially selected action
+        refreshSuggestedAddress(force = true)
     }
 
     private fun refreshInterfaceOptions() {
@@ -250,10 +274,12 @@ class OpenCodeConnectDialog(
 
         /**
          * Shows the dialog and returns the result.
+         * @param startNewPort Suggested port for the START_NEW action (first free port)
+         * @param attachPort Suggested port for AUTO/ATTACH actions (highest running server, null if none)
          * @return ConnectionInfo if user clicked Connect, null if cancelled
          */
-        fun show(project: Project, defaultPort: Int): ConnectionInfo? {
-            val dialog = OpenCodeConnectDialog(project, defaultPort)
+        fun show(project: Project, startNewPort: Int, attachPort: Int?): ConnectionInfo? {
+            val dialog = OpenCodeConnectDialog(project, startNewPort, attachPort)
             return if (dialog.showAndGet()) {
                 ConnectionInfo(dialog.hostname, dialog.port, dialog.password, dialog.actionCombo.selectedItem as OpenCodeService.ConnectAction, dialog.interfaceCombo.selectedItem as OpenCodeService.ConnectionMode, dialog.customBasePath)
             } else {

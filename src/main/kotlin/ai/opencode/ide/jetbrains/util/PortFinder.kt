@@ -11,11 +11,12 @@ import java.net.ServerSocket
  * Port allocation strategy:
  * - Starts from port 4096 and increments until an available port is found
  * - Once a port is allocated, it is fixed for the lifetime of that session
- * - No scanning for existing servers - each project gets its own server instance
+ * - Server detection scans down from DETECT_RANGE_END to find the most recently started server
  */
 object PortFinder {
     private val logger = Logger.getInstance(PortFinder::class.java)
     private const val START_PORT = 4096
+    private const val DETECT_RANGE_END = 4150
     private const val MAX_ATTEMPTS = 100
     private const val CONNECT_TIMEOUT_MS = 5000
     private const val READ_TIMEOUT_MS = 5000
@@ -102,12 +103,16 @@ object PortFinder {
     }
 
     /**
-     * Scans for a running OpenCode server in the port range.
-     * @return The port number if a running server is found, null otherwise
+     * Scans for a running OpenCode server in the port range [START_PORT, DETECT_RANGE_END).
+     * Scans downwards so that the last (biggest) occupied port is returned first,
+     * which is the most recently allocated server.
+     * @param healthCheck Predicate deciding whether a port hosts a healthy OpenCode server
+     * @return The highest port with a running server, null otherwise
      */
-    fun findRunningOpenCodeServer(): Int? {
-        for (port in START_PORT until START_PORT + MAX_ATTEMPTS) {
-            if (isOpenCodeRunningOnPort(port)) {
+    fun findLastRunningOpenCodeServer(healthCheck: (Int) -> Boolean = { isOpenCodeRunningOnPort(it) }): Int? {
+        for (port in DETECT_RANGE_END - 1 downTo START_PORT) {
+            if (healthCheck(port)) {
+                logger.info("Found running OpenCode server on port: $port")
                 return port
             }
         }
