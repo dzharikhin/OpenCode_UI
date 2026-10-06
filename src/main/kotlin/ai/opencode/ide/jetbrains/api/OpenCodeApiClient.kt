@@ -117,6 +117,7 @@ open class OpenCodeApiClient(
     fun tuiAppendPrompt(text: String): Boolean {
         val url = "$baseUrl/tui/append-prompt"
         val body = TuiAppendPromptRequest(text)
+        logger.debug("[PasteDiag] POST $url (textLen=${text.length}, hasAuth=${username != null && password != null})")
         return post(url, body) != null
     }
 
@@ -139,6 +140,7 @@ open class OpenCodeApiClient(
         return try {
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
+                    logger.debug("[PasteDiag] POST ok: $url (HTTP ${response.code})")
                     response.body?.string() ?: ""
                 } else {
                     logger.warn("[OpenCode] POST failed: $url (HTTP ${response.code})")

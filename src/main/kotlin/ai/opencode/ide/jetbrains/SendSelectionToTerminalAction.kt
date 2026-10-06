@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 
@@ -21,6 +22,8 @@ import com.intellij.openapi.vfs.VirtualFile
  */
 class SendSelectionToTerminalAction : AnAction() {
 
+    private val logger = Logger.getInstance(SendSelectionToTerminalAction::class.java)
+
     override fun getActionUpdateThread(): ActionUpdateThread {
         return ActionUpdateThread.BGT
     }
@@ -31,6 +34,7 @@ class SendSelectionToTerminalAction : AnAction() {
 
         val editor = e.getData(CommonDataKeys.EDITOR)
         val virtualFiles = e.getData(CommonDataKeys.VIRTUAL_FILE_ARRAY)
+        logger.debug("[PasteDiag] action fired: place=${e.place}, editor=${editor != null}, files=${virtualFiles?.size ?: 0}")
 
         val textToSend = StringBuilder()
 
@@ -66,7 +70,10 @@ class SendSelectionToTerminalAction : AnAction() {
 
         if (textToSend.isNotEmpty()) {
             val payload = textToSend.toString().trimEnd() + " "
+            logger.debug("[PasteDiag] payload(len=${payload.length}): '${payload.take(80)}' -> focusOrCreateTerminalAndPaste")
             openCodeService.focusOrCreateTerminalAndPaste(payload)
+        } else {
+            logger.warn("[PasteDiag] payload empty -> focusOrCreateTerminalAndPaste NOT called")
         }
     }
 

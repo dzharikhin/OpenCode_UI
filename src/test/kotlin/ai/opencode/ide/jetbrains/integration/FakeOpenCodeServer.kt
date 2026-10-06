@@ -1,21 +1,48 @@
 package ai.opencode.ide.jetbrains.integration
 
+import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
 import java.net.InetSocketAddress
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
-class FakeOpenCodeServer(val port: Int) {
+class FakeOpenCodeServer(val port: Int, private val password: String? = null) {
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
     private val sseClients = CopyOnWriteArrayList<OutputStream>()
     private val diffResponses = ConcurrentHashMap<String, String>()
     private val diffDelays = ConcurrentHashMap<String, Long>()
+    private val failuresRemaining = AtomicInteger(0)
     val receivedPrompts = CopyOnWriteArrayList<String>()
     
     val activePort: Int
         get() = server.address.port
+
+    fun failNextPosts(count: Int) {
+        failuresRemaining.set(count)
+    }
+
+    private fun authorized(ex: HttpExchange): Boolean {
+        if (password == null) return true
+        val header = ex.requestHeaders.getFirst("Authorization") ?: return false
+        if (!header.startsWith("Basic ")) return false
+        return try {
+            val decoded = String(Base64.getDecoder().decode(header.removePrefix("Basic ")))
+            decoded == "opencode:$password"
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun rejectUnauthorized(ex: HttpExchange): Boolean {
+        if (authorized(ex)) return false
+        ex.sendResponseHeaders(401, -1)
+        ex.responseBody.close()
+        return true
+    }
 
     init {
         // Catch-all handler for debugging
@@ -28,7 +55,15 @@ class FakeOpenCodeServer(val port: Int) {
 
         server.createContext("/tui/append-prompt") { ex ->
             if (ex.requestMethod == "POST") {
+                if (rejectUnauthorized(ex)) return@createContext
                 val body = ex.requestBody.reader().readText()
+                if (failuresRemaining.get() > 0) {
+                    failuresRemaining.decrementAndGet()
+                    println("  [FakeServer] POST /tui/append-prompt -> injected 500 failure")
+                    ex.sendResponseHeaders(500, -1)
+                    ex.responseBody.close()
+                    return@createContext
+                }
                 println("  [FakeServer] POST /tui/append-prompt: $body")
                 // Keep raw JSON for assertions in tests.
                 receivedPrompts.add(body)
@@ -43,6 +78,7 @@ class FakeOpenCodeServer(val port: Int) {
         }
 
         server.createContext("/global/health") { ex ->
+            if (rejectUnauthorized(ex)) return@createContext
             val resp = "OK".toByteArray()
             ex.sendResponseHeaders(200, resp.size.toLong())
             ex.responseBody.use { it.write(resp) }

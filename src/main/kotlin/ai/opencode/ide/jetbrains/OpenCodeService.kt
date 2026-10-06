@@ -51,14 +51,16 @@ class OpenCodeService(private val project: Project) : Disposable {
         private const val OPEN_CODE_TAB_PREFIX = "OpenCode"
         private const val RETRY_INTERVAL_MS = 5000L
         private const val BARRIER_TIMEOUT_MS = 2000L
+        private const val PASTE_MAX_ATTEMPTS = 20
+        private const val PASTE_RETRY_DELAY_MS = 100L
         internal var DEBOUNCE_MS = 1500L
     }
 
-    private var hostname: String = "127.0.0.1"
-    private var port: Int? = null
-    private var username: String? = null
-    private var password: String? = null
-    private var apiClient: OpenCodeApiClient? = null
+    @Volatile private var hostname: String = "127.0.0.1"
+    @Volatile private var port: Int? = null
+    @Volatile private var username: String? = null
+    @Volatile private var password: String? = null
+    @Volatile private var apiClient: OpenCodeApiClient? = null
     private var sseListener: SseEventListener? = null
     private val isConnected = AtomicBoolean(false)
     private val isConnecting = AtomicBoolean(false)
@@ -146,25 +148,57 @@ class OpenCodeService(private val project: Project) : Disposable {
     }
 
     fun focusOrCreateTerminalAndPaste(text: String) {
-        if (text.isBlank() || project.isDisposed) return
-        if (apiClient == null && terminalEditor == null) { ApplicationManager.getApplication().invokeLater { Messages.showInfoMessage(project, "OpenCode not running.", "OpenCode") }; return }
-        schedulePasteAttempt(text, 20, 100L)
+        if (text.isBlank() || project.isDisposed) {
+            logger.debug("[PasteDiag] paste skipped: blank=${text.isBlank()}, projectDisposed=${project.isDisposed}")
+            return
+        }
+        logger.debug(
+            "[PasteDiag] paste requested: apiClient=${apiClient != null}, terminalEditor=${terminalEditor != null}, " +
+                "isConnected=${isConnected.get()}, endpoint=http://$hostname:$port"
+        )
+        if (apiClient == null && terminalEditor == null) {
+            logger.warn("[PasteDiag] guard hit (no apiClient, no terminalEditor) -> showing 'OpenCode not running.'")
+            ApplicationManager.getApplication().invokeLater { Messages.showInfoMessage(project, "OpenCode not running.", "OpenCode") }
+            return
+        }
         ApplicationManager.getApplication().invokeLater { focusTerminalUI() }
+        schedulePasteAttempt(text, PASTE_MAX_ATTEMPTS, PASTE_RETRY_DELAY_MS)
     }
 
-    fun pasteToTerminal(text: String): Boolean {
-        if (text.isBlank()) return false
-        apiClient?.let { client -> 
-            AppExecutorUtil.getAppExecutorService().submit { 
-                try { 
-                    if (!client.tuiAppendPrompt(text)) logger.warn("[Paste] API failed to append prompt")
-                } catch (e: Exception) { 
-                    logger.warn("[Paste] API error: ${e.message}") 
-                } 
-            }
-            return true 
+    private fun schedulePasteAttempt(text: String, attemptsLeft: Int, delayMs: Long) {
+        if (project.isDisposed) return
+        if (attemptsLeft <= 0) {
+            logger.warn("[Paste] Giving up: API client never became available for: '$text'")
+            sendNotification("OpenCode", "Could not add text to the OpenCode prompt: not connected.", NotificationType.WARNING)
+            return
         }
-        return false
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            if (project.isDisposed) return@schedule
+            val client = apiClient
+            if (client == null) {
+                logger.debug("[PasteDiag] apiClient not ready yet, attempts left: ${attemptsLeft - 1}")
+                schedulePasteAttempt(text, attemptsLeft - 1, delayMs)
+            } else {
+                sendPaste(client, text)
+            }
+        }, delayMs, TimeUnit.MILLISECONDS)
+    }
+
+    private fun sendPaste(client: OpenCodeApiClient, text: String) {
+        AppExecutorUtil.getAppExecutorService().submit {
+            var delivered = false
+            try {
+                delivered = client.tuiAppendPrompt(text)
+            } catch (e: Exception) {
+                logger.warn("[Paste] append-prompt error for '$text': ${e.message}")
+            }
+            if (delivered) {
+                logger.debug("[PasteDiag] delivered ${text.length} chars to the OpenCode prompt")
+            } else {
+                logger.warn("[Paste] append-prompt failed for: '$text'")
+                sendNotification("OpenCode", "Could not add text to the OpenCode prompt.", NotificationType.WARNING)
+            }
+        }
     }
 
     fun addConnectionListener(listener: (Boolean) -> Unit) {
@@ -408,6 +442,12 @@ class OpenCodeService(private val project: Project) : Disposable {
     private fun initializeApiClient(host: String, port: Int) {
         val apiHost = if (host == "0.0.0.0") "127.0.0.1" else host
         apiClient = OpenCodeApiClient(apiHost, port, username, password)
+        logger.debug("[PasteDiag] apiClient initialized: http://$apiHost:$port (hasAuth=${username != null && password != null})")
+    }
+
+    private fun applySpawnedServerAuth(pwd: String?) {
+        password = pwd?.takeIf { it.isNotBlank() }
+        username = if (password != null) "opencode" else null
     }
 
     private fun startConnectionManager() {
@@ -447,7 +487,12 @@ class OpenCodeService(private val project: Project) : Disposable {
         sseListener?.disconnect(); apiClient?.let { sseListener = it.createEventListener(project.basePath!!, { handleEvent(it) }, { updateConnectionState(false) }, { updateConnectionState(true) }, { updateConnectionState(false) }).apply { connect() } }
     }
 
-    private fun updateConnectionState(connected: Boolean) { if (isConnected.getAndSet(connected) != connected) connectionListeners.forEach { it(connected) } }
+    private fun updateConnectionState(connected: Boolean) {
+        if (isConnected.getAndSet(connected) != connected) {
+            logger.debug("[PasteDiag] connection state -> connected=$connected (endpoint=http://$hostname:$port)")
+            connectionListeners.forEach { it(connected) }
+        }
+    }
     private fun sendNotification(
         title: String,
         content: String,
@@ -662,6 +707,7 @@ class OpenCodeService(private val project: Project) : Disposable {
                 showCliNotFoundError()
                 return@submit
             }
+            applySpawnedServerAuth(pwd)
             ApplicationManager.getApplication().invokeLater {
                 hostname = h; port = p; lastMode = ConnectionMode.WEB
                 createTerminalUIInternal(h, p, pwd, true, bin, customBasePath)
@@ -685,6 +731,7 @@ class OpenCodeService(private val project: Project) : Disposable {
                 showCliNotFoundError()
                 return@submit
             }
+            applySpawnedServerAuth(pwd)
             ApplicationManager.getApplication().invokeLater {
                 hostname = h; port = p; lastMode = ConnectionMode.TERMINAL
                 createTerminalUIInternal(h, p, pwd, cont = true, attach = false, customBasePath = customBasePath)
@@ -709,6 +756,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         // Password goes through the terminal session env - no shell-specific quoting needed.
         val env = if (pwd.isNullOrBlank()) emptyMap() else mapOf("OPENCODE_SERVER_PASSWORD" to pwd)
         val cmd = buildOpenCodeCommand(command ?: getOpenCodeBinary(), h, p, cont, attach)
+        logger.debug("[PasteDiag] launching terminal: cmd='$cmd', wd='$wd', tab='$t'")
         terminalVirtualFile = terminalController.open(t, wd, env, cmd)
         terminalEditor = terminalController.editor()
         terminalVirtualFile?.let { pinTerminalTab(it) }
@@ -899,24 +947,6 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
     private fun showHeadlessStatusDialog() { ApplicationManager.getApplication().invokeLater { if (Messages.showYesNoDialog(project, "Connected to $hostname:$port (Headless). Disconnect?", "OpenCode", "Disconnect", "Keep", Messages.getInformationIcon()) == Messages.YES) disconnectAndReset() } }
-    
-    private fun schedulePasteAttempt(t: String, l: Int, d: Long) { 
-        if (l <= 0 || project.isDisposed) {
-            if (l <= 0 && !project.isDisposed) {
-                logger.warn("[Paste] All retries exhausted for: $t")
-            }
-            return
-        }
-        AppExecutorUtil.getAppScheduledExecutorService().schedule({ 
-            ApplicationManager.getApplication().invokeLater { 
-                if (!project.isDisposed) {
-                    if (!pasteToTerminal(t)) {
-                        schedulePasteAttempt(t, l - 1, d)
-                    }
-                }
-            } 
-        }, d, TimeUnit.MILLISECONDS) 
-    }
 
     private fun extractPartMessageInfo(p: JsonElement): PartMessageInfo? { if (!p.isJsonObject) return null; val o = p.asJsonObject; val mId = o.get("messageID")?.asString; val sId = o.get("sessionID")?.asString; return if (mId != null && sId != null) PartMessageInfo(sId, mId) else null }
     private data class PartMessageInfo(val sessionId: String, val messageId: String)
