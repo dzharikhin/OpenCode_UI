@@ -77,6 +77,7 @@ tasks {
         include("**/SendSelectionToTerminalActionTest*.class")
         include("**/OpenCodeLogicTest*.class")
         include("**/RealProcessIntegrationTest*.class")
+        include("**/PortFinderTest*.class")
     }
 
     withType<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask> {
