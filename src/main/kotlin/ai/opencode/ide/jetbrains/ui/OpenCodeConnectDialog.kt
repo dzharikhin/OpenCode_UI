@@ -25,7 +25,9 @@ import javax.swing.JPanel
  * Dialog for configuring OpenCode server connection.
  * Allows user to specify host:port before starting the terminal.
  * @param startNewPort Default port for START_NEW action (first free port)
- * @param attachPort Default port for AUTO/ATTACH actions (last running server, null if none)
+ * @param attachPort Default port for AUTO/ATTACH actions (highest running server, null if none).
+ *        When null, AUTO falls back to [startNewPort] (it spawns there), while ATTACH falls back
+ *        to the last used address, never to a free port.
  */
 class OpenCodeConnectDialog(
     private val project: Project,
@@ -57,6 +59,7 @@ class OpenCodeConnectDialog(
     }
 
     private var lastSuggestion: String? = null
+    private var savedLastAddress: String? = null
 
     var hostname: String = "127.0.0.1"
         private set
@@ -82,8 +85,13 @@ class OpenCodeConnectDialog(
     }
 
     private fun suggestedAddress(action: OpenCodeService.ConnectAction): String {
-        val p = if (action == OpenCodeService.ConnectAction.START_NEW) startNewPort else attachPort ?: startNewPort
-        return "127.0.0.1:$p"
+        return when (action) {
+            OpenCodeService.ConnectAction.START_NEW -> "127.0.0.1:$startNewPort"
+            // AUTO spawns a server on the suggested port when none is running, so a free port is a valid fallback
+            OpenCodeService.ConnectAction.AUTO -> "127.0.0.1:${attachPort ?: startNewPort}"
+            // ATTACH never suggests a free port: fall back to the last used address instead
+            OpenCodeService.ConnectAction.ATTACH -> attachPort?.let { "127.0.0.1:$it" } ?: savedLastAddress.orEmpty()
+        }
     }
 
     /** Updates the address field to the suggestion for the current action, unless the user typed a custom address */
@@ -98,6 +106,9 @@ class OpenCodeConnectDialog(
 
     private fun loadSavedValues() {
         val props = PropertiesComponent.getInstance()
+
+        // Last successfully used address - fallback suggestion for ATTACH when no server was detected
+        savedLastAddress = props.getValue(PROP_LAST_ADDRESS, "").trim().ifBlank { null }
 
         // Load saved password (Base64 encoded for basic obfuscation)
         try {
