@@ -304,6 +304,48 @@ class OpenCodeLogicTest {
             file1.delete()
             println("✓ Passed")
 
+            // --------------------------------------------------
+            // TEST: Scenario P: Auto-open Disabled
+            // --------------------------------------------------
+            println("\n--------------------------------------------------")
+            println("TEST: Scenario P: Auto-open Disabled (notification path)")
+            println("--------------------------------------------------")
+            
+            r.setAutoOpen(false)
+            r.resetState()
+            
+            // 1. Start Turn
+            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            Thread.sleep(100)
+            
+            // 2. AI edits a file
+            s.broadcast("""{"type":"file.edited","properties":{"file":"auto_open_off.kt"}}""")
+            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-18","sessionID":"s1","role":"assistant"}}}""")
+            
+            // 3. Server returns a diff
+            s.setDiffResponse("msg-18", """[{"file":"auto_open_off.kt","before":"old","after":"new","additions":1,"deletions":0}]""")
+            
+            // 4. End Turn
+            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            
+            // 5. Verify: NO dialog shown
+            r.waitForDiffs(0, timeoutMs = 1500)
+            r.assertNoDiffsShown()
+            
+            // 6. Restore and verify auto-open works again
+            r.setAutoOpen(true)
+            r.resetState()
+            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            Thread.sleep(100)
+            s.broadcast("""{"type":"file.edited","properties":{"file":"auto_open_on.kt"}}""")
+            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-19","sessionID":"s1","role":"assistant"}}}""")
+            s.setDiffResponse("msg-19", """[{"file":"auto_open_on.kt","before":"old","after":"new","additions":1,"deletions":0}]""")
+            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            
+            r.waitForDiffs(1)
+            r.assertDiffShown("auto_open_on.kt")
+            println("✓ Passed")
+
             println("\nAll tests passed!")
             
         } catch (e: Throwable) {
@@ -376,11 +418,19 @@ class TestRunner(val serverPort: Int) {
         
         // Mock UI execution
         openCodeService.invokeLater = { r -> r.run() }
+        openCodeService.isAutoOpenEnabled = { autoOpenFlag }
         
         // Trigger connection manually
         val connectMethod = OpenCodeService::class.java.getDeclaredMethod("connectToSse")
         connectMethod.isAccessible = true
         connectMethod.invoke(openCodeService)
+    }
+
+    var autoOpenFlag: Boolean = true
+
+    fun setAutoOpen(enabled: Boolean) {
+        autoOpenFlag = enabled
+        openCodeService.isAutoOpenEnabled = { enabled }
     }
     
     fun resetState() {

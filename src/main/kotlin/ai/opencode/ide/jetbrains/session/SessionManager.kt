@@ -123,10 +123,11 @@ open class SessionManager(private val project: Project) : Disposable {
                 when (event) {
                     is VFileCreateEvent -> {
                         val file = event.file ?: continue
+                        val relPath = PathUtil.relativizeToProject(project, file.path)
+                        if (!isTrackablePath(relPath)) continue
                         onVfsChange(file)
                         // Record creation event - will be cross-checked with serverEditedFiles later
                         // to determine if it's truly AI-created or user-created
-                        val relPath = PathUtil.relativizeToProject(project, file.path)
                         aiCreatedFiles.add(relPath)
                         logger.info("[Turn #$turnNumber] VFS fileCreated: $relPath")
                     }
@@ -141,6 +142,7 @@ open class SessionManager(private val project: Project) : Disposable {
         if (file == null || !file.isValid || file.isDirectory) return
         
         val relativePath = PathUtil.relativizeToProject(project, file.path)
+        if (!isTrackablePath(relativePath)) return
         
         // Only capture if NOT already captured for this turn/gap cycle.
         // We want the ORIGINAL state before the first modification in this cycle.
@@ -182,11 +184,23 @@ open class SessionManager(private val project: Project) : Disposable {
     private fun onVfsChange(file: VirtualFile?) {
         if (file == null) return
         val relativePath = PathUtil.relativizeToProject(project, file.path)
+        if (!isTrackablePath(relativePath)) return
         // Always record change to the current set (which represents the 'active' or 'just finished' turn)
         // This captures late events that arrive after Turn End but before Next Turn Start.
         if (vfsChangedFiles.add(relativePath)) {
             logger.info("[Turn #$turnNumber] Detected VFS change: $relativePath")
         }
+    }
+
+    /**
+     * Project-scope guard: only track paths that are actually inside the project root
+     * (PathUtil.relativizeToProject returns absolute paths for files outside it) and
+     * not opencode's own runtime state.
+     */
+    private fun isTrackablePath(relativePath: String): Boolean {
+        if (File(relativePath).isAbsolute) return false
+        if (relativePath == ".opencode" || relativePath.startsWith(".opencode/")) return false
+        return true
     }
 
     // ... init ...
@@ -312,6 +326,7 @@ open class SessionManager(private val project: Project) : Disposable {
      */
     fun onFileEdited(filePath: String) {
         val relativePath = PathUtil.relativizeToProject(project, filePath)
+        if (!isTrackablePath(relativePath)) return
         serverEditedFiles.add(relativePath)
         logger.info("[Turn #$turnNumber] Server reported edit: $relativePath")
     }

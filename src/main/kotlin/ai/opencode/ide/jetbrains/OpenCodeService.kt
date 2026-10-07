@@ -8,6 +8,7 @@ import ai.opencode.ide.jetbrains.session.SessionManager
 import ai.opencode.ide.jetbrains.session.TurnSnapshot
 import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalController
 import ai.opencode.ide.jetbrains.ui.OpenCodeConnectDialog
+import ai.opencode.ide.jetbrains.util.GitIgnoreChecker
 import ai.opencode.ide.jetbrains.util.PathUtil
 import ai.opencode.ide.jetbrains.util.PortFinder
 import ai.opencode.ide.jetbrains.util.ProcessAuthDetector
@@ -20,7 +21,10 @@ import com.intellij.execution.process.CapturingProcessHandler
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.ide.util.PropertiesComponent
 import com.intellij.ui.SystemNotifications
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -51,6 +55,8 @@ class OpenCodeService(private val project: Project) : Disposable {
         private const val OPEN_CODE_TAB_PREFIX = "OpenCode"
         private const val RETRY_INTERVAL_MS = 5000L
         private const val BARRIER_TIMEOUT_MS = 2000L
+        private const val DIFF_FETCH_RETRY_DELAY_MS = 1500L
+        const val AUTO_OPEN_DIFF_REVIEW_KEY = "opencode.auto.open.diff.review"
         private const val PASTE_MAX_ATTEMPTS = 20
         private const val PASTE_RETRY_DELAY_MS = 100L
         internal var DEBOUNCE_MS = 1500L
@@ -80,6 +86,10 @@ class OpenCodeService(private val project: Project) : Disposable {
     
     // Turn state: keyed by sessionId
     private val turnMessageIds = java.util.concurrent.ConcurrentHashMap<String, String>()
+    // Latest USER message id per session. The /diff endpoint only answers for user message ids
+    // (opencode stores precomputed diffs on the user message), so this is the preferred fetch key.
+    // User messages are created before the busy event, so this map is NOT cleared on turn start.
+    private val turnUserMessageIds = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val turnPendingPayloads = java.util.concurrent.ConcurrentHashMap<String, List<FileDiff>>()
     private val turnSnapshots = java.util.concurrent.ConcurrentHashMap<String, TurnSnapshot>()
     private val turnIdleWaiting = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
@@ -101,6 +111,10 @@ class OpenCodeService(private val project: Project) : Disposable {
     
     internal var invokeLater: (Runnable) -> Unit = { 
         ApplicationManager.getApplication().invokeLater(it) 
+    }
+
+    internal var isAutoOpenEnabled: () -> Boolean = {
+        PropertiesComponent.getInstance(project).getBoolean(AUTO_OPEN_DIFF_REVIEW_KEY, false)
     }
 
     // ==================== Public API ====================
@@ -259,7 +273,9 @@ class OpenCodeService(private val project: Project) : Disposable {
             is FileEditedEvent -> sessionManager.onFileEdited(event.properties.file)
             is MessageUpdatedEvent -> {
                 val info = event.properties.info
-                if (info.role == null || info.role == "assistant") {
+                if (info.role == "user") {
+                    turnUserMessageIds[info.sessionID] = info.id
+                } else if (info.role == null || info.role == "assistant") {
                     recordTurnMessageId(info.sessionID, info.id)
                 }
             }
@@ -368,7 +384,7 @@ class OpenCodeService(private val project: Project) : Disposable {
     private fun fetchAndShowDiffs(sessionId: String, snapshot: TurnSnapshot) {
         val client = apiClient ?: return
         val path = project.basePath ?: return
-        val messageId = turnMessageIds[sessionId]
+        val messageId = turnUserMessageIds[sessionId] ?: turnMessageIds[sessionId]
         val payload = turnPendingPayloads[sessionId]
         
         logger.info("[OpenCode] Turn #${snapshot.turnNumber} fetchAndShowDiffs: messageId=$messageId, payloadSize=${payload?.size ?: 0}")
@@ -381,6 +397,14 @@ class OpenCodeService(private val project: Project) : Disposable {
                 if (messageId != null) {
                     logger.info("[OpenCode] Turn #${snapshot.turnNumber} Fetching diffs for messageId: $messageId")
                     diffs = client.getSessionDiff(sessionId, path, messageId)
+                    // The server computes and stores diffs on the USER message when the run
+                    // finishes; our fetch (triggered by the idle event) can race ahead of it.
+                    // Retry once before falling back to weaker sources.
+                    if (diffs.isEmpty() && turnUserMessageIds[sessionId] != null) {
+                        Thread.sleep(DIFF_FETCH_RETRY_DELAY_MS)
+                        diffs = client.getSessionDiff(sessionId, path, messageId)
+                        logger.info("[OpenCode] Turn #${snapshot.turnNumber} Diff retry returned ${diffs.size} diffs")
+                    }
                     logger.info("[OpenCode] Turn #${snapshot.turnNumber} Server returned ${diffs.size} diffs: ${diffs.map { "${it.file}(+${it.additions}/-${it.deletions})" }}")
                 }
                 
@@ -394,6 +418,15 @@ class OpenCodeService(private val project: Project) : Disposable {
                 if (diffs.isEmpty() && messageId == null) {
                     logger.warn("[OpenCode] Turn #${snapshot.turnNumber} No messageId or payload, trying session summary")
                     client.getSession(sessionId, path)?.summary?.diffs?.let { diffs = it }
+                }
+
+                // 0. Gitignore filter (fail-open): drop ignored files (build artifacts, logs, etc.)
+                if (diffs.isNotEmpty()) {
+                    val ignored = GitIgnoreChecker.filterIgnored(path, diffs.map { it.file })
+                    if (ignored.isNotEmpty()) {
+                        logger.info("[OpenCode] Turn #${snapshot.turnNumber} Gitignored (dropped): $ignored")
+                        diffs = diffs.filter { it.file !in ignored }
+                    }
                 }
                 
                 // 1. Force VFS refresh for Server files and Known files BEFORE processing
@@ -418,10 +451,15 @@ class OpenCodeService(private val project: Project) : Disposable {
                 
                 if (entries.isNotEmpty()) {
                     sessionManager.updateKnownState(entries.map { it.file })
-                    
-                    logger.info("[OpenCode] Turn #${snapshot.turnNumber} Showing ${entries.size} diffs")
-                    invokeLater {
-                        if (!project.isDisposed) diffViewerService.showMultiFileDiff(entries)
+
+                    if (isAutoOpenEnabled()) {
+                        logger.info("[OpenCode] Turn #${snapshot.turnNumber} Showing ${entries.size} diffs")
+                        invokeLater {
+                            if (!project.isDisposed) diffViewerService.showMultiFileDiff(entries)
+                        }
+                    } else {
+                        logger.info("[OpenCode] Turn #${snapshot.turnNumber} Auto-open disabled; notifying with review action")
+                        sendReviewNotification(snapshot.turnNumber, entries)
                     }
                 } else {
                     logger.info("[OpenCode] Turn #${snapshot.turnNumber} No diffs to show after processing.")
@@ -523,11 +561,43 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
 
+    /**
+     * Notification shown when auto-open is disabled but the turn produced diffs.
+     * Carries a "Review changes" action that opens the diff viewer on demand.
+     */
+    private fun sendReviewNotification(turnNumber: Int, entries: List<DiffEntry>) {
+        if (entries.isEmpty()) return
+        val files = entries.joinToString(", ") { it.file.substringAfterLast('/') }
+        invokeLater {
+            if (project.isDisposed) return@invokeLater
+            try {
+                NotificationGroupManager.getInstance()
+                    .getNotificationGroup("OpenCode")
+                    .createNotification(
+                        "OpenCode Changes Ready",
+                        "Turn #$turnNumber changed ${entries.size} file(s): $files",
+                        NotificationType.INFORMATION
+                    )
+                    .addAction(object : AnAction("Review changes") {
+                        override fun actionPerformed(e: AnActionEvent) {
+                            invokeLater {
+                                if (!project.isDisposed) diffViewerService.showMultiFileDiff(entries)
+                            }
+                        }
+                    })
+                    .setImportant(true)
+                    .notify(project)
+            } catch (e: Throwable) {
+                logger.debug("[OpenCode] Review notification failed: ${e.message}")
+            }
+        }
+    }
+
     override fun dispose() { disconnectAndReset(); terminalController.dispose() }
 
     private fun disconnectAndReset() {
         connectionManagerTask?.cancel(true); sseListener?.disconnect(); isConnected.set(false); isConnecting.set(false)
-        turnMessageIds.clear(); turnPendingPayloads.clear(); turnSnapshots.clear(); turnIdleWaiting.clear(); turnBarrierTasks.values.forEach { it.cancel(false) }; turnBarrierTasks.clear()
+        turnMessageIds.clear(); turnUserMessageIds.clear(); turnPendingPayloads.clear(); turnSnapshots.clear(); turnIdleWaiting.clear(); turnBarrierTasks.values.forEach { it.cancel(false) }; turnBarrierTasks.clear()
         terminateProcess()
         terminalController.close()
         terminalVirtualFile = null; terminalEditor = null; webVirtualFile = null; port = null; hostname = "127.0.0.1"; apiClient = null

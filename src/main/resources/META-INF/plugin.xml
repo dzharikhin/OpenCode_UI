@@ -40,6 +40,13 @@
       <keyboard-shortcut keymap="Mac OS X 10.5+" first-keystroke="meta ESCAPE"/>
     </action>
 
+    <action id="OpenCode.ToggleAutoDiffReview"
+            class="ai.opencode.ide.jetbrains.ToggleAutoDiffReviewAction"
+            text="Auto-open Diff Review"
+            description="Automatically open the diff viewer when OpenCode finishes a task">
+      <add-to-group group-id="ToolsMenu" anchor="after" relative-to-action="OpenCode.QuickLaunch"/>
+    </action>
+
     <action id="OpenCode.AddLines"
             class="ai.opencode.ide.jetbrains.SendSelectionToTerminalAction"
             text="Add lines to OpenCode Terminal"
