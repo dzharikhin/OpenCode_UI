@@ -10,11 +10,10 @@ A JetBrains IDE plugin that integrates [OpenCode](https://opencode.ai) — the o
 | Feature | Description | Shortcut (Mac) | Shortcut (Win/Linux) |
 |---------|-------------|----------------|----------------------|
 | **Quick Launch** | Connect to existing OpenCode server or create new terminal | `Cmd + Esc` | `Ctrl + \` |
-| **Add to Terminal** | Send current file/selection or selected files to OpenCode | `Opt + Cmd + K` | `Ctrl + Alt + K` |
+| **Add to Terminal** | Send native `@file` mention chips — line-pinned for the current selection, whole-file context otherwise — from the editor or Project View | `Opt + Cmd + K` | `Ctrl + Alt + K` |
 | **Diff Review** | View diffs and accept/reject changes in IDE | — | — |
 | **Notifications** | System alert when task completes | — | — |
 | **Auto-Resume** | Restore last session on launch | — | — |
-| **Smart Links** | Clickable file paths in terminal | — | — |
 | **Auth Support** | Optional password for OpenCode server | — | — |
 | **Local Change Alert** | Warn when local edits differ from AI output | — | — |
 
@@ -33,12 +32,13 @@ Click the **OpenCode** icon in the right sidebar to instantly focus or create an
 
 ### Context Menus
 
-- **Editor**: Right-click in editor → *OpenCode: Add Context*
-- **Project View**: Right-click on files/folders → *OpenCode: Add File(s)*
+- **Editor**: Right-click in editor → *Add lines to OpenCode Terminal*
+- **Project View**: Right-click on files/folders → *Add to OpenCode Terminal*
 
 ## Requirements
 
-- **JetBrains IDE**: IntelliJ IDEA, WebStorm, PyCharm, etc. (2025.2+)
+- **JetBrains IDE**: IntelliJ IDEA, WebStorm, PyCharm, etc. (2026.2+)
+- **Web mode**: requires the bundled *Web Browser (JCEF)* plugin to be enabled
 - **OpenCode CLI**: Install via `npm install -g opencode` or see [opencode.ai/download](https://opencode.ai/download)
 
 ## Installation
@@ -65,15 +65,16 @@ Press `Cmd+Esc` (Mac) or `Ctrl+\` (Win/Linux) to open the connection dialog. You
 In the editor or Project View, press `Opt+Cmd+K` (Mac) or `Ctrl+Alt+K` (Win/Linux).
 
 - If the OpenCode terminal is not open yet, the plugin creates/focuses it automatically.
-- In the editor, it shares the **current file** even if nothing is selected.
+- In the editor, it shares the **current file** as a mention chip — with a **line pin** when text is selected (`@path#2-4`).
 
 ![Step 2: Selection](images/2.png)
 
-The plugin will send:
+The plugin inserts native `@file` mention chips into the OpenCode prompt:
 
-- **Editor selection**: `@path/to/file.kt#L10-25`
-- **Editor (no selection)**: `@path/to/file.kt`
-- **Project View selection**: `@path/to/file.kt` for each selected file
+- **Editor (with selection)**: line-pinned chip for the selected range (`@path#2-4`)
+- **Editor (no selection)**: whole-file chip for the current file
+- **Project View selection**: whole-file chip for each selected file
+- **Paths with spaces / directories**: plain-text `@path` reference (chips only support files without spaces)
 
 ![Step 3: Result in Terminal](images/3.png)
 
@@ -105,10 +106,6 @@ When OpenCode edits files, the plugin opens a native IDE diff viewer.
 The plugin sends a system notification when OpenCode finishes a task (transitions from Busy to Idle). This allows you to switch to other work while the AI is generating code, and be notified immediately when it's done.
 
 > **Tip**: To receive desktop notifications, please ensure your operating system allows notifications for the JetBrains IDE (e.g., on macOS: *System Settings > Notifications > IntelliJ IDEA*).
-
-### 6. Smart File Links
-
-File paths in the terminal output (e.g., `@src/main/kotlin/Main.kt#L10-20`) are clickable. Clicking them opens the file in the editor and highlights the referenced lines.
 
 ## Keyboard Shortcuts
 

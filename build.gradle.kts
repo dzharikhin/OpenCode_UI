@@ -1,11 +1,11 @@
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.1.20"
-    id("org.jetbrains.intellij.platform") version "2.10.2"
+    id("org.jetbrains.kotlin.jvm") version "2.4.20"
+    id("org.jetbrains.intellij.platform") version "2.19.0"
 }
 
 group = "ai.opencode"
-version = "1.1.0"
+version = "2.0.0"
 
 repositories {
     mavenCentral()
@@ -25,6 +25,9 @@ dependencies {
         // Terminal API
         bundledPlugin("org.jetbrains.plugins.terminal")
 
+        // JCEF (Web Browser) - extracted from platform into a bundled plugin since 2026.2
+        bundledPlugin("com.intellij.modules.jcef")
+
     }
 
     // HTTP client and JSON
@@ -36,27 +39,45 @@ dependencies {
 }
 
 intellijPlatform {
+    // javac2 forms/nullability instrumentation is not needed for this pure-Kotlin plugin
+    // (and fails on this platform layout).
+    instrumentCode.set(false)
+
     pluginConfiguration {
         ideaVersion {
-            sinceBuild = "242"
+            sinceBuild = "262"
             // No untilBuild - compatible with all future versions
         }
 
         changeNotes = """
-            <h2>1.1.0</h2>
+            <h2>2.0.0</h2>
             <ul>
-                <li>New: Custom base path support — added a "Custom base path" dropdown in the connection dialog, allowing users to specify a working directory for OpenCode terminal sessions. Automatically populated with detected project modules.</li>
-                <li>Fix: Fixed the OpenCode CLI install command in README to match official download instructions.</li>
+                <li><b>Breaking:</b> Requires IntelliJ IDEA 2026.2 or newer (build 262+). Older IDE versions are no longer supported.</li>
+                <li>Adapted to the reworked 2026.2 terminal API: OpenCode now runs in a real editor tab backed by a detached terminal session.</li>
+                <li><b>Web mode:</b> now requires the bundled "Web Browser (JCEF)" plugin to be enabled (JCEF was extracted from the platform in 2026.2).</li>
+                <li>Fix: multi-file diff viewer opens at the requested file index again.</li>
             </ul>
         """.trimIndent()
     }
 }
 
 tasks {
-    // Set the JVM compatibility versions
-    withType<JavaCompile> {
-        sourceCompatibility = "17"
-        targetCompatibility = "17"
+    // Pin the Kotlin module name so `internal` member mangling stays stable across
+    // compilations and matches previously built callers (KGP default changed in 2.2+).
+    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        compilerOptions {
+            freeCompilerArgs.addAll("-module-name", "OpenCode_UI")
+        }
+    }
+
+    test {
+        // Restrict to the real test classes: the test source set also contains helper
+        // classes (FakeOpenCodeServer, TestRunner, TestSessionManager, MockDiffViewerService)
+        // that the JUnit Platform would otherwise try to run and report as invalid.
+        include("**/SendSelectionToTerminalActionTest*.class")
+        include("**/OpenCodeLogicTest*.class")
+        include("**/RealProcessIntegrationTest*.class")
+        include("**/PortFinderTest*.class")
     }
 
     withType<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask> {
@@ -69,8 +90,14 @@ tasks {
     }
 }
 
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25)
     }
 }

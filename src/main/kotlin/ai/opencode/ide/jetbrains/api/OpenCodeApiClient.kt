@@ -114,9 +114,15 @@ open class OpenCodeApiClient(
         return SseEventListener(baseUrl, serverPath, onEvent, onError, onConnected, onDisconnected, username, password)
     }
 
-    fun tuiAppendPrompt(text: String): Boolean {
-        val url = "$baseUrl/tui/append-prompt"
+    fun tuiAppendPrompt(text: String, directory: String? = null): Boolean {
+        var url = "$baseUrl/tui/append-prompt"
+        if (!directory.isNullOrBlank()) {
+            // Workspace routing: without it the server falls back to process.cwd(),
+            // which silently drops the event when the TUI runs in another directory.
+            url += "?directory=${encode(PathUtil.toOpenCodeServerPath(directory))}"
+        }
         val body = TuiAppendPromptRequest(text)
+        logger.debug("[PasteDiag] POST $url (textLen=${text.length}, hasAuth=${username != null && password != null})")
         return post(url, body) != null
     }
 
@@ -139,6 +145,7 @@ open class OpenCodeApiClient(
         return try {
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
+                    logger.debug("[PasteDiag] POST ok: $url (HTTP ${response.code})")
                     response.body?.string() ?: ""
                 } else {
                     logger.warn("[OpenCode] POST failed: $url (HTTP ${response.code})")

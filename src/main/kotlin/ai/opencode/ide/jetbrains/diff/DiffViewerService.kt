@@ -66,8 +66,9 @@ open class DiffViewerService(private val project: Project) : Disposable {
             request
         }
 
-        val chain = SimpleDiffRequestChain(requests)
-        chain.index = (initialIndex ?: 0).coerceIn(0, requests.lastIndex)
+        // DiffRequestChain.setIndex is deprecated for removal and a no-op since 262;
+        // the initial selection must be passed to the chain constructor.
+        val chain = SimpleDiffRequestChain(requests, (initialIndex ?: 0).coerceIn(0, requests.lastIndex))
 
         // Track the opened diff file for cleanup
         val connection = project.messageBus.connect(this)

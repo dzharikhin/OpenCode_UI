@@ -3,7 +3,6 @@ package ai.opencode.ide.jetbrains.util
 import com.intellij.openapi.diagnostic.Logger
 import java.io.IOException
 import java.net.Proxy
-import java.net.ServerSocket
 
 /**
  * Utility for finding available ports for OpenCode server.

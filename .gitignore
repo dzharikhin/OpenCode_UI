@@ -42,3 +42,6 @@ bin/
 .DS_Store
 sdk
 cursor_ui
+
+### OpenCode CLI local config ###
+.opencode/
