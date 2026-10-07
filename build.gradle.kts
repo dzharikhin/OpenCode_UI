@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "ai.opencode"
-version = "2.0.0"
+version = "2.1.0"
 
 repositories {
     mavenCentral()
@@ -78,6 +78,7 @@ tasks {
         include("**/OpenCodeLogicTest*.class")
         include("**/RealProcessIntegrationTest*.class")
         include("**/PortFinderTest*.class")
+        include("**/GitIgnoreCheckerTest*.class")
     }
 
     withType<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask> {

@@ -92,11 +92,13 @@ When OpenCode edits files, the plugin opens a native IDE diff viewer.
 
 - **Chronological View**: Changes are shown in the order they were made, starting from the first modified file.
 - **Navigation**: Use **← →** arrows to switch files and **↑ ↓** arrows to jump between changes.
-- **Trigger**: The diff viewer opens automatically when OpenCode finishes a response (session idle).
+- **Trigger**: Controlled by the auto-open toggle (see below). When enabled, the diff viewer opens automatically when OpenCode finishes a response (session idle); otherwise the completion notification offers a **Review changes** action.
 - **Progress**: The title shows your review progress (e.g., `1 of 5`) for multi-file changes.
 - **Accept**: Writes the AI's changes to disk and stages the file (git add). Automatically opens the next file.
 - **Reject**: Restores the file to its state before the AI started editing. Automatically opens the next file.
 - **Local Modified**: The diff title shows `(Local Modified)` when your file differs from AI output.
+- **Auto-open Toggle**: Off by default — the task-completed notification offers a **Review changes** action instead of opening the viewer. Enable it via **Tools → OpenCode → Auto-open Diff Review** (checkmark) to open the diff viewer automatically when a task completes. The preference is stored per project.
+- **Gitignore Awareness**: Files ignored by git (build outputs, logs, `.opencode/`) are excluded from the diff review.
 
 ![Diff Viewer - Accept](images/5.png)
 ![Diff Viewer - Reject](images/6.png)
