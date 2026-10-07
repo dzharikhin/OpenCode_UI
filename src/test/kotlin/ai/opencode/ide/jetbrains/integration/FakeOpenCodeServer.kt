@@ -17,6 +17,7 @@ class FakeOpenCodeServer(val port: Int, private val password: String? = null) {
     private val diffDelays = ConcurrentHashMap<String, Long>()
     private val failuresRemaining = AtomicInteger(0)
     val receivedPrompts = CopyOnWriteArrayList<String>()
+    val receivedPromptUris = CopyOnWriteArrayList<String>()
     
     val activePort: Int
         get() = server.address.port
@@ -67,6 +68,7 @@ class FakeOpenCodeServer(val port: Int, private val password: String? = null) {
                 println("  [FakeServer] POST /tui/append-prompt: $body")
                 // Keep raw JSON for assertions in tests.
                 receivedPrompts.add(body)
+                receivedPromptUris.add(ex.requestURI.toString())
                 
                 val resp = "{}".toByteArray()
                 ex.sendResponseHeaders(200, resp.size.toLong())

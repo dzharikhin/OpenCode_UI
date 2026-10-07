@@ -40,11 +40,19 @@ class OpenCodeTerminalController(
     private var file: VirtualFile? = null
     private var editorConnection: MessageBusConnection? = null
     private var commandTask: ScheduledFuture<*>? = null
+    private var typingTask: ScheduledFuture<*>? = null
     private val closed = AtomicBoolean(true)
 
     companion object {
         private const val COMMAND_POLL_INTERVAL_MS = 500L
         private const val COMMAND_POLL_TIMEOUT_MS = 30_000L
+
+        /**
+         * Delay between typed chunks (also the initial poll interval). Gives the TUI
+         * time to react between a typed @-mention query and the Enter chunk that
+         * selects the highlighted autocomplete option (the file search is asynchronous).
+         */
+        internal const val TYPE_CHUNK_DELAY_MS = 250L
     }
 
     /** True while a live session exists and its editor tab is open. */
@@ -79,7 +87,7 @@ class OpenCodeTerminalController(
         }
 
         tab = createdTab
-        val viewFile = TerminalViewFiles.create(createdTab.view, createdTab.closeOnProcessTermination)
+        val viewFile = TerminalViewFiles.create(createdTab)
         file = viewFile
         closed.set(false)
 
@@ -94,9 +102,78 @@ class OpenCodeTerminalController(
     /** Editor instance currently showing the terminal, if any. */
     fun editor(): FileEditor? = file?.let { FileEditorManager.getInstance(project).getEditors(it).firstOrNull() }
 
+    /**
+     * Types the given text chunks into the terminal sequentially, waiting for the
+     * session to reach [TerminalViewSessionState.Running] first and delaying
+     * [chunkDelayMs] between chunks so the TUI can react (e.g. render the
+     * @-mention autocomplete menu before the Enter chunk selects it).
+     *
+     * Chunks are sent as plain keystrokes - never with bracketed paste mode,
+     * which the TUI intercepts as file attachments and would break the
+     * @-mention autocomplete.
+     *
+     * @return true when the typing sequence was scheduled.
+     */
+    fun typeChunks(chunks: List<String>, chunkDelayMs: Long = TYPE_CHUNK_DELAY_MS): Boolean {
+        if (chunks.isEmpty()) return false
+        typingTask?.cancel(false)
+        typingTask = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+            { typeStep(chunks.iterator(), chunkDelayMs, System.currentTimeMillis()) },
+            chunkDelayMs,
+            TimeUnit.MILLISECONDS
+        )
+        return true
+    }
+
+    /** Sends one chunk per tick, re-polling until the session is Running. */
+    private fun typeStep(iterator: Iterator<String>, delayMs: Long, startedAt: Long) {
+        if (closed.get() || project.isDisposed) return
+        val v = tab?.view ?: return
+        when (v.sessionState.value) {
+            is TerminalViewSessionState.Running -> {
+                if (!iterator.hasNext()) return
+                val chunk = iterator.next()
+                ApplicationManager.getApplication().invokeLater {
+                    if (closed.get() || project.isDisposed) return@invokeLater
+                    val view = tab?.view ?: return@invokeLater
+                    try {
+                        view.createSendTextBuilder().send(chunk)
+                    } catch (e: Exception) {
+                        logger.warn("[Terminal] Typing chunk failed: ${e.message}")
+                        return@invokeLater
+                    }
+                    typingTask = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+                        { typeStep(iterator, delayMs, startedAt) },
+                        delayMs,
+                        TimeUnit.MILLISECONDS
+                    )
+                }
+            }
+            is TerminalViewSessionState.Terminated ->
+                logger.warn("[Terminal] Session terminated before typed input could be sent")
+            else -> {
+                if (System.currentTimeMillis() - startedAt >= COMMAND_POLL_TIMEOUT_MS) {
+                    logger.warn("[Terminal] Session did not reach Running state; typed input not sent")
+                    return
+                }
+                typingTask = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+                    { typeStep(iterator, delayMs, startedAt) },
+                    delayMs,
+                    TimeUnit.MILLISECONDS
+                )
+            }
+        }
+    }
+
+    private fun cancelTyping() {
+        typingTask?.cancel(false)
+        typingTask = null
+    }
+
     /** Kills the shell process and closes the editor tab. Safe to call repeatedly, any thread. */
     fun terminate() {
         cancelCommand()
+        cancelTyping()
         val v = tab?.view
         val f = file
         try {
@@ -133,6 +210,7 @@ class OpenCodeTerminalController(
 
     private fun cleanupState() {
         cancelCommand()
+        cancelTyping()
         disconnectEditorListener()
         tab = null
         file = null
@@ -147,6 +225,7 @@ class OpenCodeTerminalController(
                 if (file === this@OpenCodeTerminalController.file && !closed.getAndSet(true)) {
                     logger.info("[Terminal] Editor tab closed by user")
                     cancelCommand()
+                    cancelTyping()
                     tab = null
                     this@OpenCodeTerminalController.file = null
                     disconnectEditorListener()

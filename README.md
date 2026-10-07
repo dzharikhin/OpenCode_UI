@@ -10,7 +10,7 @@ A JetBrains IDE plugin that integrates [OpenCode](https://opencode.ai) — the o
 | Feature | Description | Shortcut (Mac) | Shortcut (Win/Linux) |
 |---------|-------------|----------------|----------------------|
 | **Quick Launch** | Connect to existing OpenCode server or create new terminal | `Cmd + Esc` | `Ctrl + \` |
-| **Add to Terminal** | Send current file/selection or selected files to OpenCode | `Opt + Cmd + K` | `Ctrl + Alt + K` |
+| **Add to Terminal** | Send native `@file` mention chips — line-pinned for the current selection, whole-file context otherwise — from the editor or Project View | `Opt + Cmd + K` | `Ctrl + Alt + K` |
 | **Diff Review** | View diffs and accept/reject changes in IDE | — | — |
 | **Notifications** | System alert when task completes | — | — |
 | **Auto-Resume** | Restore last session on launch | — | — |
@@ -32,8 +32,8 @@ Click the **OpenCode** icon in the right sidebar to instantly focus or create an
 
 ### Context Menus
 
-- **Editor**: Right-click in editor → *OpenCode: Add Context*
-- **Project View**: Right-click on files/folders → *OpenCode: Add File(s)*
+- **Editor**: Right-click in editor → *Add lines to OpenCode Terminal*
+- **Project View**: Right-click on files/folders → *Add to OpenCode Terminal*
 
 ## Requirements
 
@@ -65,15 +65,16 @@ Press `Cmd+Esc` (Mac) or `Ctrl+\` (Win/Linux) to open the connection dialog. You
 In the editor or Project View, press `Opt+Cmd+K` (Mac) or `Ctrl+Alt+K` (Win/Linux).
 
 - If the OpenCode terminal is not open yet, the plugin creates/focuses it automatically.
-- In the editor, it shares the **current file** even if nothing is selected.
+- In the editor, it shares the **current file** as a mention chip — with a **line pin** when text is selected (`@path#2-4`).
 
 ![Step 2: Selection](images/2.png)
 
-The plugin will send:
+The plugin inserts native `@file` mention chips into the OpenCode prompt:
 
-- **Editor selection**: `@path/to/file.kt#L10-25`
-- **Editor (no selection)**: `@path/to/file.kt`
-- **Project View selection**: `@path/to/file.kt` for each selected file
+- **Editor (with selection)**: line-pinned chip for the selected range (`@path#2-4`)
+- **Editor (no selection)**: whole-file chip for the current file
+- **Project View selection**: whole-file chip for each selected file
+- **Paths with spaces / directories**: plain-text `@path` reference (chips only support files without spaces)
 
 ![Step 3: Result in Terminal](images/3.png)
 

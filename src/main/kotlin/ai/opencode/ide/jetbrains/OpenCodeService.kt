@@ -188,7 +188,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         AppExecutorUtil.getAppExecutorService().submit {
             var delivered = false
             try {
-                delivered = client.tuiAppendPrompt(text)
+                delivered = client.tuiAppendPrompt(text, project.basePath)
             } catch (e: Exception) {
                 logger.warn("[Paste] append-prompt error for '$text': ${e.message}")
             }
@@ -754,7 +754,9 @@ class OpenCodeService(private val project: Project) : Disposable {
         val t = "$OPEN_CODE_TAB_PREFIX($p)"
         val wd = customBasePath ?: project.basePath
         // Password goes through the terminal session env - no shell-specific quoting needed.
-        val env = if (pwd.isNullOrBlank()) emptyMap() else mapOf("OPENCODE_SERVER_PASSWORD" to pwd)
+        val env = buildMap<String, String> {
+            if (!pwd.isNullOrBlank()) put("OPENCODE_SERVER_PASSWORD", pwd)
+        }
         val cmd = buildOpenCodeCommand(command ?: getOpenCodeBinary(), h, p, cont, attach)
         logger.debug("[PasteDiag] launching terminal: cmd='$cmd', wd='$wd', tab='$t'")
         terminalVirtualFile = terminalController.open(t, wd, env, cmd)
@@ -767,6 +769,39 @@ class OpenCodeService(private val project: Project) : Disposable {
         val cmdSafe = if (command.contains(" ")) "\"$command\"" else command
         return if (attach) "$cmdSafe attach http://$h:$p${if (cont) " --continue" else ""}" else "$cmdSafe --hostname $h --port $p${if (cont) " --continue" else ""}"
     }
+
+    /** Focus the terminal UI before typed mentions land in it. No-op in web mode. */
+    internal fun focusTerminalUIForMentions() {
+        if (terminalVirtualFile != null) invokeLater { focusTerminalUI() }
+    }
+
+    /** Test hook: when set, used instead of the real terminal controller for typed mentions. */
+    internal var typedMentionChannel: ((List<String>) -> Boolean)? = null
+
+    /**
+     * Types native @-mention queries into the OpenCode prompt, one per path.
+     * Each typed query is selected with Enter, which makes the TUI insert a real
+     * whole-file mention chip (no line pin).
+     *
+     * @param relativePaths project-relative file paths without spaces
+     * @return true when the typing sequence was scheduled
+     */
+    internal fun sendTypedMentions(relativePaths: List<String>): Boolean {
+        if (relativePaths.isEmpty()) return false
+        val channel = typedMentionChannel
+        if (channel != null) return channel(relativePaths)
+        if (!terminalController.isAlive()) return false
+        invokeLater { terminalController.typeChunks(buildMentionChunks(relativePaths)) }
+        return true
+    }
+
+    /**
+     * Chunk sequence per file: " @path" types the mention query (the leading space
+     * guarantees the @ trigger fires after whitespace), Enter selects the highlighted
+     * autocomplete option, which replaces the query with the real chip.
+     */
+    internal fun buildMentionChunks(relativePaths: List<String>): List<String> =
+        relativePaths.flatMap { listOf(" @$it", "\r") }
 
     @Volatile private var _cachedBinary: String? = null
 
